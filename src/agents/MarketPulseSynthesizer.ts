@@ -1,11 +1,24 @@
 import { AgentRunner } from "../orchestrator/AgentRunner.js";
 import type { MarketPulsePackage } from "../contracts/index.js";
 import { MarketPulsePackageSchema } from "../contracts/marketPulsePackage.zod.js";
+import { getAgentConfig } from "../config/agentConfig.js";
 
 export { MarketPulsePackageSchema };
 
 export class MarketPulseSynthesizer {
-  private readonly runner = new AgentRunner("openai/gpt-oss-20b");
+  private readonly runner: AgentRunner;
+  private readonly maxTokens: number;
+
+  constructor() {
+    const cfg = getAgentConfig({
+      workflow: "market_pulse",
+      role: "MarketPulseSynthesizer",
+      defaultModel: "llama-3.3-70b-versatile",
+      defaultMaxTokens: 6000,
+    });
+    this.runner = new AgentRunner(cfg.model);
+    this.maxTokens = cfg.constraints.maxTokens ?? 6000;
+  }
 
   async synthesize(params: {
     runId: string;
@@ -35,7 +48,7 @@ export class MarketPulseSynthesizer {
       ].join("\n"),
       userPrompt: JSON.stringify(params),
       schema: MarketPulsePackageSchema,
-      maxTokens: 6000,
+      maxTokens: this.maxTokens,
     }) as Promise<MarketPulsePackage>;
   }
 }

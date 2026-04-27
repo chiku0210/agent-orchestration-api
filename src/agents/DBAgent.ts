@@ -1,14 +1,22 @@
 import { AgentRunner } from "../orchestrator/AgentRunner.js";
 import type { z } from "zod";
 import { SpecForgeArchitectureBlockSchema, SpecForgeDbBlockSchema } from "./specForgeSchemas.js";
-
-const MODEL = "llama-3.3-70b-versatile" as const;
+import { getAgentConfig } from "../config/agentConfig.js";
 
 const ArchInputSchema = SpecForgeArchitectureBlockSchema;
 type Architecture = z.infer<typeof ArchInputSchema>;
 
 export class DBAgent {
-  private readonly runner = new AgentRunner(MODEL);
+  private readonly runner: AgentRunner;
+
+  constructor() {
+    const cfg = getAgentConfig({
+      workflow: "spec_forge",
+      role: "DBAgent",
+      defaultModel: "llama-3.3-70b-versatile",
+    });
+    this.runner = new AgentRunner(cfg.model);
+  }
 
   async run(params: { architecture: Architecture; refinementPrompt: string }) {
     return this.runner.run({

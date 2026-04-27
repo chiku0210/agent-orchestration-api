@@ -1,14 +1,25 @@
 import { AgentRunner } from "../orchestrator/AgentRunner.js";
 import type { z } from "zod";
 import { FileBundleListSchema, SpecForgeArchitectureBlockSchema, SpecForgeDbBlockSchema } from "./specForgeSchemas.js";
-
-const MODEL = "llama-3.3-70b-versatile" as const;
+import { getAgentConfig } from "../config/agentConfig.js";
 
 type Arch = z.infer<typeof SpecForgeArchitectureBlockSchema>;
 type Db = z.infer<typeof SpecForgeDbBlockSchema>;
 
 export class BackendAgent {
-  private readonly runner = new AgentRunner(MODEL);
+  private readonly runner: AgentRunner;
+  private readonly maxTokens: number;
+
+  constructor() {
+    const cfg = getAgentConfig({
+      workflow: "spec_forge",
+      role: "BackendAgent",
+      defaultModel: "llama-3.3-70b-versatile",
+      defaultMaxTokens: 6000,
+    });
+    this.runner = new AgentRunner(cfg.model);
+    this.maxTokens = cfg.constraints.maxTokens ?? 6000;
+  }
 
   async run(params: { architecture: Arch; db: Db; refinementPrompt: string }) {
     return this.runner.run({
@@ -30,7 +41,7 @@ export class BackendAgent {
         refinementPrompt: params.refinementPrompt,
       }),
       schema: FileBundleListSchema,
-      maxTokens: 6000,
+      maxTokens: this.maxTokens,
     });
   }
 }

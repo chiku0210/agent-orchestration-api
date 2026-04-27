@@ -6,8 +6,7 @@ import {
   SpecForgePrdBlockSchema,
   SpecForgeRiskListSchema,
 } from "./specForgeSchemas.js";
-
-const MODEL = "llama-3.3-70b-versatile" as const;
+import { getAgentConfig } from "../config/agentConfig.js";
 
 const Step1ContextSchema = z.object({
   prd: SpecForgePrdBlockSchema,
@@ -16,7 +15,19 @@ const Step1ContextSchema = z.object({
 type Step1 = z.infer<typeof Step1ContextSchema>;
 
 export class ArchitectureAgent {
-  private readonly runner = new AgentRunner(MODEL);
+  private readonly runner: AgentRunner;
+  private readonly maxTokens: number;
+
+  constructor() {
+    const cfg = getAgentConfig({
+      workflow: "spec_forge",
+      role: "ArchitectureAgent",
+      defaultModel: "llama-3.3-70b-versatile",
+      defaultMaxTokens: 4096,
+    });
+    this.runner = new AgentRunner(cfg.model);
+    this.maxTokens = cfg.constraints.maxTokens ?? 4096;
+  }
 
   async run(params: { step1: Step1; refinementPrompt: string }) {
     return this.runner.run({
@@ -37,7 +48,7 @@ export class ArchitectureAgent {
         refinementPrompt: params.refinementPrompt,
       }),
       schema: SpecForgeArchitectureBlockSchema,
-      maxTokens: 4096,
+      maxTokens: this.maxTokens,
     });
   }
 }

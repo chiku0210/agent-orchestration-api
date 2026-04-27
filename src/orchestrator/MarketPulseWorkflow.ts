@@ -12,6 +12,9 @@ import { EventLogger } from "./EventLogger.js";
 import { logWorkflowMilestone } from "./workflowLog.js";
 import { createTimeBudget, TimeBudgetExceededError, withTimeout } from "./timeBudget.js";
 import { MarketPulsePackageSchema } from "../contracts/marketPulsePackage.zod.js";
+import { getAgentTimeoutMs } from "./agentBudgets.js";
+import { getAgentConfig } from "../config/agentConfig.js";
+import { saveMarketPulsePackageArtifact } from "../storage/artifacts.js";
 
 export class MarketPulseWorkflow {
   private readonly targetUserAgent = new TargetUserAgent();
@@ -44,28 +47,71 @@ export class MarketPulseWorkflow {
       run: () => Promise<{ facetId: FacetId; summary: string }>;
     }) => {
       await events.append({ type: "facet_started", facet: { id: facet.id, agentRole: facet.role } });
-      await events.append({ type: "agent_started", agent: { role: facet.role, model: MARKETPULSE_FACET_MODEL } });
+      const agentTimeoutMs = getAgentTimeoutMs({
+        workflow: "market_pulse",
+        role: facet.role,
+        defaultMs: facetTimeoutMs,
+      });
+      const cfg = getAgentConfig({
+        workflow: "market_pulse",
+        role: facet.role,
+        defaultModel: MARKETPULSE_FACET_MODEL,
+        defaultTimeoutMs: agentTimeoutMs,
+      });
+      const constraints =
+        cfg.constraints.timeoutMs === undefined && cfg.constraints.maxTokens === undefined
+          ? undefined
+          : {
+              ...(cfg.constraints.timeoutMs !== undefined ? { timeoutMs: cfg.constraints.timeoutMs } : {}),
+              ...(cfg.constraints.maxTokens !== undefined ? { maxTokens: cfg.constraints.maxTokens } : {}),
+            };
+      await events.append({
+        type: "agent_started",
+        agent: { role: facet.role, model: cfg.model, ...(constraints ? { constraints } : {}) },
+      });
 
       const t0 = Date.now();
-      const timeoutForFacet = Math.min(facetTimeoutMs, Math.max(250, budget.remainingMs() - 4_000));
-      const result = await withTimeout(facet.run(), timeoutForFacet, `market_pulse facet ${facet.id}`).catch((err) => {
+      const timeoutForFacet = Math.min(cfg.constraints.timeoutMs ?? agentTimeoutMs, Math.max(250, budget.remainingMs() - 4_000));
+      const { result, outcome, error } = await withTimeout(facet.run(), timeoutForFacet, `market_pulse facet ${facet.id}`)
+        .then((r) => ({ result: r, outcome: "succeeded" as const, error: undefined }))
+        .catch((err) => {
         // eslint-disable-next-line no-console
         console.error(`[MarketPulse] Facet ${facet.id} failed`, err);
         const status = err && typeof err === "object" ? (err as { status?: number }).status : undefined;
         if (err instanceof TimeBudgetExceededError) {
-          return { facetId: facet.id, summary: "Timed out (degraded facet)." };
+          return {
+            result: { facetId: facet.id, summary: "Timed out (degraded facet)." },
+            outcome: "timed_out" as const,
+            error: { message: err.message, code: err.code },
+          };
         }
         if (status === 429) {
-          return { facetId: facet.id, summary: "Rate-limited (429) (degraded facet)." };
+          return {
+            result: { facetId: facet.id, summary: "Rate-limited (429) (degraded facet)." },
+            outcome: "degraded" as const,
+            error: { message: "Rate-limited (429)", code: "RATE_LIMITED" },
+          };
         }
         if (status === 413) {
-          return { facetId: facet.id, summary: "Request too large (413) (degraded facet)." };
+          return {
+            result: { facetId: facet.id, summary: "Request too large (413) (degraded facet)." },
+            outcome: "degraded" as const,
+            error: { message: "Request too large (413)", code: "REQUEST_TOO_LARGE" },
+          };
         }
-        return { facetId: facet.id, summary: "Facet unavailable (agent failed) (degraded facet)." };
+        return {
+          result: { facetId: facet.id, summary: "Facet unavailable (agent failed) (degraded facet)." },
+          outcome: "failed" as const,
+          error: { message: err instanceof Error ? err.message : String(err), code: "AGENT_FAILED" },
+        };
       });
       const durationMs = Date.now() - t0;
 
-      await events.append({ type: "agent_finished", agent: { role: facet.role, model: MARKETPULSE_FACET_MODEL }, durationMs });
+      await events.append({
+        type: "agent_finished",
+        agent: { role: facet.role, model: cfg.model, outcome, ...(error ? { error } : {}) },
+        durationMs,
+      });
       await events.append({
         type: "facet_finished",
         facet: { id: facet.id, agentRole: facet.role },
@@ -120,7 +166,29 @@ export class MarketPulseWorkflow {
 
     // Fan-in: synthesize a strict MarketPulsePackage.
     await events.append({ type: "synthesizer_started", synthesizer: { role: "MarketPulseSynthesizer" } });
-    await events.append({ type: "agent_started", agent: { role: "MarketPulseSynthesizer", model: "llama-3.3-70b-versatile" } });
+    const synthRole: AgentRole = "MarketPulseSynthesizer";
+    const synthTimeoutResolved = getAgentTimeoutMs({
+      workflow: "market_pulse",
+      role: synthRole,
+      defaultMs: synthTimeoutMs,
+    });
+    const synthCfg = getAgentConfig({
+      workflow: "market_pulse",
+      role: synthRole,
+      defaultModel: "llama-3.3-70b-versatile",
+      defaultTimeoutMs: synthTimeoutResolved,
+    });
+    const synthConstraints =
+      synthCfg.constraints.timeoutMs === undefined && synthCfg.constraints.maxTokens === undefined
+        ? undefined
+        : {
+            ...(synthCfg.constraints.timeoutMs !== undefined ? { timeoutMs: synthCfg.constraints.timeoutMs } : {}),
+            ...(synthCfg.constraints.maxTokens !== undefined ? { maxTokens: synthCfg.constraints.maxTokens } : {}),
+          };
+    await events.append({
+      type: "agent_started",
+      agent: { role: synthRole, model: synthCfg.model, ...(synthConstraints ? { constraints: synthConstraints } : {}) },
+    });
     const t0 = Date.now();
 
     const facetSummaries = [targetUser, altSolutions, pricing, distribution, risks].map((r) => ({
@@ -129,9 +197,8 @@ export class MarketPulseWorkflow {
     }));
 
     const remainingForSynth = budget.remainingMs();
-    const pkg =
-      remainingForSynth < 6_000
-        ? MarketPulsePackageSchema.parse({
+    const synthFallback = (rationale: string) =>
+      MarketPulsePackageSchema.parse({
             version: 1,
             runId,
             createdAt,
@@ -139,7 +206,7 @@ export class MarketPulseWorkflow {
             market_fit_summary: {
               verdict: "needs_validation",
               confidence: 0.5,
-              rationale: "Degraded synthesis: time budget low; review facet summaries.",
+              rationale,
               assumptions: [],
             },
             personas_jtbd: [],
@@ -150,7 +217,15 @@ export class MarketPulseWorkflow {
             success_metrics: [],
             validation_plan: [],
             open_questions: [],
-          })
+          });
+
+    const { pkg, outcome: synthOutcome, error: synthError } =
+      remainingForSynth < 6_000
+        ? {
+            pkg: synthFallback("Degraded synthesis: time budget low; review facet summaries."),
+            outcome: "degraded" as const,
+            error: { message: "Time budget low for synthesis", code: "TIME_BUDGET_LOW" },
+          }
         : await withTimeout(
             this.synthesizer.synthesize({
               runId,
@@ -158,37 +233,35 @@ export class MarketPulseWorkflow {
               featureIdea: params.featureIdea,
               facetSummaries,
             }),
-            Math.min(synthTimeoutMs, Math.max(500, remainingForSynth - 1_500)),
+            Math.min(synthCfg.constraints.timeoutMs ?? synthTimeoutResolved, Math.max(500, remainingForSynth - 1_500)),
             "market_pulse synth",
-          ).catch(() =>
-            MarketPulsePackageSchema.parse({
-              version: 1,
-              runId,
-              createdAt,
-              featureIdea: params.featureIdea,
-              market_fit_summary: {
-                verdict: "needs_validation",
-                confidence: 0.5,
-                rationale: "Degraded synthesis: synthesizer timed out; review facet summaries.",
-                assumptions: [],
-              },
-              personas_jtbd: [],
-              competitive_landscape: [],
-              value_hypotheses: facetSummaries.map((f) => `${f.facetId}: ${f.summary}`).slice(0, 8),
-              pricing_hypotheses: [],
-              mvp_scope: { goals: [], nonGoals: [], mustHave: [], niceToHave: [] },
-              success_metrics: [],
-              validation_plan: [],
-              open_questions: [],
-            }),
-          );
+          )
+            .then((p) => ({ pkg: p, outcome: "succeeded" as const, error: undefined }))
+            .catch((err) => {
+              if (err instanceof TimeBudgetExceededError) {
+                return {
+                  pkg: synthFallback("Degraded synthesis: synthesizer timed out; review facet summaries."),
+                  outcome: "timed_out" as const,
+                  error: { message: err.message, code: err.code },
+                };
+              }
+              return {
+                pkg: synthFallback("Degraded synthesis: synthesizer failed; review facet summaries."),
+                outcome: "failed" as const,
+                error: { message: err instanceof Error ? err.message : String(err), code: "AGENT_FAILED" },
+              };
+            });
 
     const durationMs = Date.now() - t0;
     await events.append({
       type: "agent_finished",
-      agent: { role: "MarketPulseSynthesizer", model: "llama-3.3-70b-versatile" },
+      agent: { role: synthRole, model: synthCfg.model, outcome: synthOutcome, ...(synthError ? { error: synthError } : {}) },
       durationMs,
     });
+
+    // Critical ordering: persist the package before emitting any "finished"/artifact-ref events.
+    await saveMarketPulsePackageArtifact(runId, pkg);
+
     await events.append({
       type: "synthesizer_finished",
       synthesizer: { role: "MarketPulseSynthesizer" },

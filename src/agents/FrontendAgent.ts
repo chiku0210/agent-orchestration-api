@@ -1,10 +1,7 @@
 import { AgentRunner } from "../orchestrator/AgentRunner.js";
 import type { z } from "zod";
 import { SpecForgeArchitectureBlockSchema, SpecForgeDbBlockSchema, SpecForgeHtmlOutputSchema } from "./specForgeSchemas.js";
-
-// Use a high-limit, reliable JSON-following model to avoid Groq TPM caps
-// seen with `qwen/qwen3-32b` for larger prompts.
-const MODEL = "openai/gpt-oss-20b" as const;
+import { getAgentConfig } from "../config/agentConfig.js";
 
 type Arch = z.infer<typeof SpecForgeArchitectureBlockSchema>;
 type Db = z.infer<typeof SpecForgeDbBlockSchema>;
@@ -36,7 +33,19 @@ function parseLooseJson(raw: string): unknown {
 }
 
 export class FrontendAgent {
-  private readonly runner = new AgentRunner(MODEL);
+  private readonly runner: AgentRunner;
+  private readonly maxTokens: number;
+
+  constructor() {
+    const cfg = getAgentConfig({
+      workflow: "spec_forge",
+      role: "FrontendAgent",
+      defaultModel: "openai/gpt-oss-20b",
+      defaultMaxTokens: 6000,
+    });
+    this.runner = new AgentRunner(cfg.model);
+    this.maxTokens = cfg.constraints.maxTokens ?? 6000;
+  }
 
   async run(params: {
     architecture: Arch;
@@ -70,7 +79,7 @@ export class FrontendAgent {
       }),
       // Intentionally avoid schema-enforced mode here; this model is prone to returning
       // slightly different keys / wrappers. We'll parse + normalize locally for durability.
-      maxTokens: 6000,
+      maxTokens: this.maxTokens,
     });
 
     const parsed = typeof raw === "string" ? parseLooseJson(raw) : raw;

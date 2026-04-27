@@ -1,13 +1,25 @@
 import "dotenv/config";
 import express from "express";
+import cors from "cors";
 import { z } from "zod";
 
 import { runEventBus } from "./orchestrator/eventBus.js";
 import { Orchestrator } from "./orchestrator/Orchestrator.js";
 import { getLatestSucceededMarketPulseRunId } from "./storage/runs.js";
-import { getLatestSpecForgeHtmlArtifact } from "./storage/artifacts.js";
+import { getLatestSpecForgeHtmlArtifact, getMarketPulsePackageBySourceRunId } from "./storage/artifacts.js";
+import { pool } from "./storage/db.js";
 
 const app = express();
+
+app.use(
+  cors({
+    origin: ["http://localhost:3000"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  }),
+);
+// Express v5 doesn't accept "*" here (path-to-regexp); use a regex for preflight.
+app.options(/.*/, cors());
 
 app.use(express.json({ limit: "1mb" }));
 
@@ -68,7 +80,7 @@ app.post("/v1/runs", async (req, res) => {
   });
 });
 
-app.get("/v1/runs/:runId/events", (req, res) => {
+app.get("/v1/runs/:runId/events", async (req, res) => {
   const { runId } = req.params;
 
   res.status(200);
@@ -78,6 +90,22 @@ app.get("/v1/runs/:runId/events", (req, res) => {
 
   // Initial event so clients know the stream is open.
   res.write(`: connected\n\n`);
+
+  // Durability: replay persisted events so late subscribers still see `run_finished`
+  // (and can auto-fetch artifacts) even if the in-memory emitter already fired.
+  try {
+    const r = await pool.query<{ payload: unknown }>(
+      `select payload from events where run_id = $1 order by created_at asc`,
+      [runId],
+    );
+    for (const row of r.rows) {
+      res.write(`data: ${JSON.stringify(row.payload)}\n\n`);
+    }
+    res.write(`: replay_done\n\n`);
+  } catch (err) {
+    // If replay fails, keep live-streaming; the client can still fetch on-demand.
+    res.write(`: replay_failed ${JSON.stringify({ message: err instanceof Error ? err.message : String(err) })}\n\n`);
+  }
 
   const handler = (payload: { runId: string; event: unknown }) => {
     // SSE message: one JSON-encoded RunEvent per message
@@ -99,6 +127,64 @@ app.get("/v1/runs/:runId/spec-forge-html", async (req, res) => {
     return;
   }
   res.status(200).json(artifact);
+});
+
+// Back-compat endpoint used by the web UI for auto-fetch after `run_finished`.
+// Returns a minimal SpecForgeArtifacts shape (HTML-only mode) plus the MarketPulse package if present.
+app.get("/v1/runs/:runId/artifacts", async (req, res) => {
+  const { runId } = req.params;
+
+  const [marketPulsePackage, specForgeHtml] = await Promise.all([
+    getMarketPulsePackageBySourceRunId(runId),
+    getLatestSpecForgeHtmlArtifact(runId),
+  ]);
+
+  // HTML-only mode: the backend persists a `spec_forge_html` artifact, but the web contract
+  // expects a `specForgeArtifacts.output.html` field. Provide a minimal compatible object.
+  const specForgeArtifacts =
+    specForgeHtml == null
+      ? undefined
+      : {
+          version: 1 as const,
+          runId,
+          createdAt: Date.now(),
+          marketPulseRunId: runId,
+          prd: { problemStatement: "", users: [], userStories: [], acceptanceCriteria: [], outOfScope: [] },
+          architecture: { overview: "", apiContracts: [], dataModelNotes: [], fileStructure: [] },
+          db: { sqlMigrations: [], notes: [] },
+          backend: { notes: [] },
+          frontend: { notes: [] },
+          risks: [],
+          taskPlan: [],
+          output: { html: specForgeHtml.html, summary: specForgeHtml.summary },
+        };
+
+  if (!marketPulsePackage && !specForgeArtifacts) {
+    res.status(404).json({ error: "not_found", details: { message: "no artifacts found for run" } });
+    return;
+  }
+
+  res.status(200).json({
+    marketPulsePackage: marketPulsePackage ?? undefined,
+    specForgeArtifacts,
+  });
+});
+
+app.get("/v1/runs/latest/artifacts", async (_req, res) => {
+  const runId = await getLatestSucceededMarketPulseRunId();
+  if (!runId) {
+    res.status(404).json({ error: "not_found", details: { message: "no succeeded market_pulse runs found" } });
+    return;
+  }
+
+  const marketPulsePackage = await getMarketPulsePackageBySourceRunId(runId);
+  const specForgeHtml = await getLatestSpecForgeHtmlArtifact(runId);
+
+  res.status(200).json({
+    runId,
+    marketPulsePackage: marketPulsePackage ?? undefined,
+    specForgeHtml: specForgeHtml ?? undefined,
+  });
 });
 
 const port = 8080;

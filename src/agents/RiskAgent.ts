@@ -1,12 +1,20 @@
 import type { MarketPulsePackage } from "../contracts/index.js";
 import { AgentRunner } from "../orchestrator/AgentRunner.js";
 import { SpecForgeRiskListSchema } from "./specForgeSchemas.js";
-
-const MODEL =
-  process.env.GROQ_SPEC_FORGE_RISK_MODEL?.trim() || "openai/gpt-oss-safeguard-20b";
+import { getAgentConfig } from "../config/agentConfig.js";
 
 export class RiskAgent {
-  private readonly runner = new AgentRunner(MODEL);
+  private readonly runner: AgentRunner;
+
+  constructor() {
+    const defaultModel = process.env.GROQ_SPEC_FORGE_RISK_MODEL?.trim() || "openai/gpt-oss-safeguard-20b";
+    const cfg = getAgentConfig({
+      workflow: "spec_forge",
+      role: "RiskAgent",
+      defaultModel,
+    });
+    this.runner = new AgentRunner(cfg.model);
+  }
 
   async run(params: { marketPulsePackage: MarketPulsePackage; refinementPrompt: string }) {
     return this.runner.run({

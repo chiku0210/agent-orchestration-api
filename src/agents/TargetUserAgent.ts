@@ -1,9 +1,19 @@
 import { MARKETPULSE_FACET_MODEL } from "../config/models.js";
 import { AgentRunner } from "../orchestrator/AgentRunner.js";
 import { MarketPulseFacetResultSchema } from "./marketpulseFacetSchemas.js";
+import { getAgentConfig } from "../config/agentConfig.js";
 
 export class TargetUserAgent {
-  private readonly runner = new AgentRunner(MARKETPULSE_FACET_MODEL);
+  private readonly runner: AgentRunner;
+
+  constructor() {
+    const cfg = getAgentConfig({
+      workflow: "market_pulse",
+      role: "TargetUserAgent",
+      defaultModel: MARKETPULSE_FACET_MODEL,
+    });
+    this.runner = new AgentRunner(cfg.model);
+  }
 
   async run(featureIdea: string) {
     return this.runner.run({

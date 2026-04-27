@@ -5,8 +5,9 @@ import { logWorkflowMilestone } from "./workflowLog.js";
 import { capRefinementPrompt, compactMarketPulseForSpecForge } from "../contracts/marketPulseCompact.js";
 import { getMarketPulsePackageBySourceRunId, saveSpecForgeHtmlArtifact } from "../storage/artifacts.js";
 import { createTimeBudget, withTimeout } from "./timeBudget.js";
-
-const MODEL_FE = "openai/gpt-oss-20b" as const;
+import { TimeBudgetExceededError } from "./timeBudget.js";
+import { getAgentTimeoutMs } from "./agentBudgets.js";
+import { getAgentConfig } from "../config/agentConfig.js";
 
 function approxBytes(s: string): number {
   return Buffer.byteLength(s, "utf8");
@@ -36,12 +37,18 @@ export class SpecForgeWorkflow {
     // HTML-only mode: generate a single demo HTML document (no backend/frontend scaffolds).
     const mpCompact = compactMarketPulseForSpecForge(marketPulse, { mode: "tight" });
     const refinementPromptCapped = capRefinementPrompt(refinementPrompt, 4_000);
+    const feCfg = getAgentConfig({
+      workflow: "spec_forge",
+      role: "FrontendAgent",
+      defaultModel: "openai/gpt-oss-20b",
+      defaultTimeoutMs: nodeTimeoutMs,
+    });
 
     const htmlOut = await this.runDagNodeSequentialBudgeted(
       events,
       "frontend",
       "FrontendAgent",
-      MODEL_FE,
+      feCfg.model,
       budget,
       nodeTimeoutMs,
       async () =>
@@ -103,11 +110,39 @@ export class SpecForgeWorkflow {
   ): Promise<T> {
     const t0 = Date.now();
     await events.append({ type: "dag_node_started", dag: { nodeId, agentRole: role } });
-    await events.append({ type: "agent_started", agent: { role, model } });
-    const timeoutForNode = Math.min(nodeTimeoutMs, Math.max(500, budget.remainingMs() - 10_000));
-    const out = await withTimeout(work(), timeoutForNode, `spec_forge node ${nodeId}/${role}`).catch(() => fallback());
+    const agentTimeoutMs = getAgentTimeoutMs({ workflow: "spec_forge", role, defaultMs: nodeTimeoutMs });
+    const cfg = getAgentConfig({ workflow: "spec_forge", role, defaultModel: model, defaultTimeoutMs: agentTimeoutMs });
+    const constraints =
+      cfg.constraints.timeoutMs === undefined && cfg.constraints.maxTokens === undefined
+        ? undefined
+        : {
+            ...(cfg.constraints.timeoutMs !== undefined ? { timeoutMs: cfg.constraints.timeoutMs } : {}),
+            ...(cfg.constraints.maxTokens !== undefined ? { maxTokens: cfg.constraints.maxTokens } : {}),
+          };
+    await events.append({
+      type: "agent_started",
+      agent: { role, model: cfg.model, ...(constraints ? { constraints } : {}) },
+    });
+
+    const timeoutForNode = Math.min(cfg.constraints.timeoutMs ?? agentTimeoutMs, Math.max(500, budget.remainingMs() - 10_000));
+    const { out, outcome, error } = await withTimeout(work(), timeoutForNode, `spec_forge node ${nodeId}/${role}`)
+      .then((v) => ({ out: v, outcome: "succeeded" as const, error: undefined }))
+      .catch((err) => {
+        if (err instanceof TimeBudgetExceededError) {
+          return { out: fallback(), outcome: "timed_out" as const, error: { message: err.message, code: err.code } };
+        }
+        return {
+          out: fallback(),
+          outcome: "failed" as const,
+          error: { message: err instanceof Error ? err.message : String(err), code: "AGENT_FAILED" },
+        };
+      });
     const durationMs = Date.now() - t0;
-    await events.append({ type: "agent_finished", agent: { role, model }, durationMs });
+    await events.append({
+      type: "agent_finished",
+      agent: { role, model: cfg.model, outcome, ...(error ? { error } : {}) },
+      durationMs,
+    });
     await events.append({ type: "dag_node_finished", dag: { nodeId, agentRole: role }, durationMs, summary: `${role} complete` });
     return out;
   }

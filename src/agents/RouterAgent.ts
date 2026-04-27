@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { AgentRunner } from "../orchestrator/AgentRunner.js";
 import type { WorkflowType } from "../contracts/index.js";
+import { getAgentConfig } from "../config/agentConfig.js";
 
 const RouterOutputSchema = z.object({
   workflow: z.enum(["market_pulse", "spec_forge"]),
@@ -11,7 +12,13 @@ export class RouterAgent {
   private readonly runner: AgentRunner;
 
   constructor() {
-    this.runner = new AgentRunner("openai/gpt-oss-20b");
+    const cfg = getAgentConfig({
+      // Router is workflow-agnostic; allow generic override via AGENT_MODEL__RouterAgent.
+      workflow: "market_pulse",
+      role: "RouterAgent",
+      defaultModel: "openai/gpt-oss-20b",
+    });
+    this.runner = new AgentRunner(cfg.model);
   }
 
   async route(userInput: string): Promise<WorkflowType> {

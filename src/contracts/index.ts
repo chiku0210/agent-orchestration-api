@@ -79,11 +79,23 @@ export type RunEvent =
     })
   | (RunEventBase & {
       type: "agent_started";
-      agent: { role: AgentRole; model: string };
+      agent: {
+        role: AgentRole;
+        model: string;
+        constraints?: {
+          timeoutMs?: number;
+          maxTokens?: number;
+        };
+      };
     })
   | (RunEventBase & {
       type: "agent_finished";
-      agent: { role: AgentRole; model: string };
+      agent: {
+        role: AgentRole;
+        model: string;
+        outcome?: "succeeded" | "timed_out" | "failed" | "degraded";
+        error?: { message: string; code?: string };
+      };
       durationMs: number;
     })
   | (RunEventBase & {

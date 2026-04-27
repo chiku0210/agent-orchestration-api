@@ -4,7 +4,6 @@ import { pool } from "../storage/db.js";
 import type { WorkflowType } from "../contracts/index.js";
 import { EventLogger } from "./EventLogger.js";
 import { getRunById, updateRunStatus } from "../storage/runs.js";
-import { saveMarketPulsePackageArtifact } from "../storage/artifacts.js";
 import { MarketPulseWorkflow } from "./MarketPulseWorkflow.js";
 import { SpecForgeWorkflow } from "./SpecForgeWorkflow.js";
 import { logExecuteRun, logWorkflowMilestone } from "./workflowLog.js";
@@ -52,23 +51,21 @@ export class Orchestrator {
       if (workflow === "market_pulse") {
         const wf = new MarketPulseWorkflow();
         const pkg = await wf.run({ featureIdea: row.input_prompt, runId, createdAt: Date.now() });
-        await saveMarketPulsePackageArtifact(runId, pkg);
 
-        // Auto-trigger SpecForge after a successful MarketPulse run.
-        // This matches demo expectations: one "idea" request produces both
-        // research (MarketPulse) and a scaffold/code bundle (SpecForge).
-        const { runId: specForgeRunId } = await this.createRun({
-          workflow: "spec_forge",
-          inputPrompt: row.input_prompt,
+        // Auto-trigger SpecForge after a successful MarketPulse run, but keep the SAME runId
+        // so the frontend can continue consuming SSE from a single source.
+        const sf = new SpecForgeWorkflow();
+        await sf.run({
+          runId,
           marketPulseRunId: runId,
+          refinementPrompt: row.input_prompt,
         });
         logWorkflowMilestone({
           runId,
           workflow: "market_pulse",
-          message: "chained to spec_forge (async)",
-          data: { specForgeRunId, sourceMarketPulseRunId: runId },
+          message: "chained to spec_forge (same runId)",
+          data: { sourceMarketPulseRunId: runId },
         });
-        void this.executeRun(specForgeRunId);
       } else {
         if (!row.market_pulse_run_id) {
           throw new Error("SpecForge requires market_pulse_run_id (complete MarketPulse first)");
