@@ -2,7 +2,7 @@ import { AgentRunner } from "../orchestrator/AgentRunner.js";
 import type { z } from "zod";
 import { SpecForgeArchitectureBlockSchema, SpecForgeDbBlockSchema } from "./specForgeSchemas.js";
 
-const MODEL = "openai/gpt-oss-120b" as const;
+const MODEL = "llama-3.3-70b-versatile" as const;
 
 const ArchInputSchema = SpecForgeArchitectureBlockSchema;
 type Architecture = z.infer<typeof ArchInputSchema>;

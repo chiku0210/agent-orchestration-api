@@ -5,7 +5,7 @@ import { MarketPulsePackageSchema } from "../contracts/marketPulsePackage.zod.js
 export { MarketPulsePackageSchema };
 
 export class MarketPulseSynthesizer {
-  private readonly runner = new AgentRunner("llama-3.3-70b-versatile");
+  private readonly runner = new AgentRunner("openai/gpt-oss-20b");
 
   async synthesize(params: {
     runId: string;
@@ -24,9 +24,18 @@ export class MarketPulseSynthesizer {
         "",
         "Required top-level keys:",
         "version, runId, createdAt, featureIdea, market_fit_summary, personas_jtbd, competitive_landscape, value_hypotheses, pricing_hypotheses, mvp_scope, success_metrics, validation_plan, open_questions",
+        "",
+        "Critical nested shapes (use these EXACT keys):",
+        'competitive_landscape: array of { name: string, category: "competitor"|"substitute", strengths: string[], weaknesses: string[], differentiatorsForUs: string[] }',
+        'validation_plan: array of { experiment: string, timeBox: string, successCriteria: string }',
+        "",
+        "Examples (for structure only; do not copy text):",
+        'competitive_landscape item example: {"name":"ExampleCo","category":"competitor","strengths":["..."],"weaknesses":["..."],"differentiatorsForUs":["..."]}',
+        'validation_plan item example: {"experiment":"...","timeBox":"1 week","successCriteria":"..."}',
       ].join("\n"),
       userPrompt: JSON.stringify(params),
       schema: MarketPulsePackageSchema,
+      maxTokens: 6000,
     }) as Promise<MarketPulsePackage>;
   }
 }

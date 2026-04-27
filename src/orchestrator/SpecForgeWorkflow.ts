@@ -9,6 +9,8 @@ import { EventLogger } from "./EventLogger.js";
 import { logWorkflowMilestone } from "./workflowLog.js";
 import { buildSpecForgeMpContext, capRefinementPrompt, compactMarketPulseForSpecForge } from "../contracts/marketPulseCompact.js";
 import { getMarketPulsePackageBySourceRunId, saveFileBundleArtifact } from "../storage/artifacts.js";
+import { createTimeBudget, TimeBudgetExceededError, withTimeout } from "./timeBudget.js";
+import { degradedBackendScaffold, degradedFrontendScaffold } from "./degradedSpecForgeScaffold.js";
 
 const MODEL_120B = "openai/gpt-oss-120b" as const;
 const MODEL_RISK = process.env.GROQ_SPEC_FORGE_RISK_MODEL?.trim() || "openai/gpt-oss-safeguard-20b";
@@ -36,6 +38,9 @@ export class SpecForgeWorkflow {
   async run(params: { runId: string; marketPulseRunId: string; refinementPrompt: string }): Promise<FileBundleItem[]> {
     const { runId, marketPulseRunId, refinementPrompt } = params;
     const events = new EventLogger({ runId, workflow: "spec_forge" });
+    const budgetMs = Number.parseInt(process.env.SPEC_FORGE_BUDGET_MS ?? "60000", 10) || 60_000;
+    const nodeTimeoutMs = Number.parseInt(process.env.SPEC_FORGE_NODE_TIMEOUT_MS ?? "25000", 10) || 25_000;
+    const budget = createTimeBudget(budgetMs);
 
     const marketPulse: MarketPulsePackage | null = await getMarketPulsePackageBySourceRunId(marketPulseRunId);
     if (!marketPulse) {
@@ -61,7 +66,28 @@ export class SpecForgeWorkflow {
     await events.append({ type: "dag_node_started", dag: { nodeId: "prd_and_risks", agentRole: "PRDAgent" } });
     await events.append({ type: "agent_started", agent: { role: "PRDAgent", model: MODEL_120B } });
     const tPrd0 = Date.now();
-    const prd = await this.prdAgent.run(prdContext);
+    const prd = await withTimeout(
+      this.prdAgent.run(prdContext),
+      Math.min(nodeTimeoutMs, Math.max(500, budget.remainingMs() - 30_000)),
+      "spec_forge prd",
+    ).catch((err) => {
+      if (err instanceof TimeBudgetExceededError) {
+        return {
+          problemStatement: "Degraded PRD: timed out while generating PRD.",
+          users: ["TBD users (degraded)"],
+          userStories: ["TBD user stories (degraded)"],
+          acceptanceCriteria: ["TBD acceptance criteria (degraded)"],
+          outOfScope: ["TBD out of scope (degraded)"],
+        };
+      }
+      return {
+        problemStatement: "Degraded PRD: schema mismatch or error while generating PRD.",
+        users: ["TBD users (degraded)"],
+        userStories: ["TBD user stories (degraded)"],
+        acceptanceCriteria: ["TBD acceptance criteria (degraded)"],
+        outOfScope: ["TBD out of scope (degraded)"],
+      };
+    });
     const prdDurationMs = Date.now() - tPrd0;
     await events.append({ type: "agent_finished", agent: { role: "PRDAgent", model: MODEL_120B }, durationMs: prdDurationMs });
     await events.append({
@@ -74,7 +100,19 @@ export class SpecForgeWorkflow {
     await events.append({ type: "dag_node_started", dag: { nodeId: "prd_and_risks", agentRole: "RiskAgent" } });
     await events.append({ type: "agent_started", agent: { role: "RiskAgent", model: MODEL_RISK } });
     const tRisk0 = Date.now();
-    const riskList = await this.riskAgent.run(riskContext);
+    const riskList = await withTimeout(
+      this.riskAgent.run(riskContext),
+      Math.min(nodeTimeoutMs, Math.max(500, budget.remainingMs() - 25_000)),
+      "spec_forge risk",
+    ).catch(() => ({
+      risks: [
+        {
+          category: "reliability" as const,
+          risk: "Degraded risk analysis: timed out.",
+          mitigation: "Re-run SpecForge with higher budget or faster model.",
+        },
+      ],
+    }));
     const riskDurationMs = Date.now() - tRisk0;
     await events.append({ type: "agent_finished", agent: { role: "RiskAgent", model: MODEL_RISK }, durationMs: riskDurationMs });
     await events.append({
@@ -87,30 +125,46 @@ export class SpecForgeWorkflow {
     const step1 = { prd, risks: riskList };
 
     // Step 2 — Architecture (sequential)
-    const architecture = await this.runDagNodeSequential(
+    const architecture = await this.runDagNodeSequentialBudgeted(
       events,
       "architecture",
       "ArchitectureAgent",
       MODEL_120B,
+      budget,
+      nodeTimeoutMs,
       async () => this.architectureAgent.run({ step1, refinementPrompt }),
+      () => ({
+        overview: "Degraded architecture: timed out.",
+        apiContracts: [],
+        dataModelNotes: [],
+        fileStructure: [],
+      }),
     );
 
     // Step 3 — DB
-    const db = await this.runDagNodeSequential(
+    const db = await this.runDagNodeSequentialBudgeted(
       events,
       "db",
       "DBAgent",
       MODEL_120B,
+      budget,
+      nodeTimeoutMs,
       async () => this.dbAgent.run({ architecture, refinementPrompt }),
+      () => ({ sqlMigrations: [], notes: ["Degraded DB: timed out."] }),
     );
 
     // Step 4 — Backend
-    const backendFiles = await this.runDagNodeSequential(
+    const backendFiles = await this.runDagNodeSequentialBudgeted(
       events,
       "backend",
       "BackendAgent",
       MODEL_120B,
+      budget,
+      nodeTimeoutMs,
       async () => this.backendAgent.run({ architecture, db, refinementPrompt }),
+      () => ({
+        files: degradedBackendScaffold(),
+      }),
     );
 
     // Step 5 — Frontend
@@ -118,13 +172,18 @@ export class SpecForgeWorkflow {
       .slice(0, 12)
       .map((f) => `${f.path} (${f.content.length} chars)`)
       .join("\n");
-    const frontendFiles = await this.runDagNodeSequential(
+    const frontendFiles = await this.runDagNodeSequentialBudgeted(
       events,
       "frontend",
       "FrontendAgent",
       MODEL_FE,
+      budget,
+      nodeTimeoutMs,
       async () =>
         this.frontendAgent.run({ architecture, db, backendFileSummary: beSummary, refinementPrompt }),
+      () => ({
+        files: degradedFrontendScaffold(),
+      }),
     );
 
     const fileBundle = mergeFileBundles(backendFiles.files, frontendFiles.files);
@@ -137,17 +196,21 @@ export class SpecForgeWorkflow {
     return fileBundle;
   }
 
-  private async runDagNodeSequential<T>(
+  private async runDagNodeSequentialBudgeted<T>(
     events: EventLogger,
     nodeId: DagNodeId,
     role: AgentRole,
     model: string,
+    budget: ReturnType<typeof createTimeBudget>,
+    nodeTimeoutMs: number,
     work: () => Promise<T>,
+    fallback: () => T,
   ): Promise<T> {
     const t0 = Date.now();
     await events.append({ type: "dag_node_started", dag: { nodeId, agentRole: role } });
     await events.append({ type: "agent_started", agent: { role, model } });
-    const out = await work();
+    const timeoutForNode = Math.min(nodeTimeoutMs, Math.max(500, budget.remainingMs() - 10_000));
+    const out = await withTimeout(work(), timeoutForNode, `spec_forge node ${nodeId}/${role}`).catch(() => fallback());
     const durationMs = Date.now() - t0;
     await events.append({ type: "agent_finished", agent: { role, model }, durationMs });
     await events.append({ type: "dag_node_finished", dag: { nodeId, agentRole: role }, durationMs, summary: `${role} complete` });

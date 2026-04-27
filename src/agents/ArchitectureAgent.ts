@@ -7,7 +7,7 @@ import {
   SpecForgeRiskListSchema,
 } from "./specForgeSchemas.js";
 
-const MODEL = "openai/gpt-oss-120b" as const;
+const MODEL = "llama-3.3-70b-versatile" as const;
 
 const Step1ContextSchema = z.object({
   prd: SpecForgePrdBlockSchema,
@@ -30,12 +30,14 @@ export class ArchitectureAgent {
         "Critical: fileStructure MUST be an array of objects with EXACTLY: { path: string, purpose: string }.",
         "Do not omit `purpose` — it must be a short sentence explaining why the file exists and what it contains.",
         'Example fileStructure item: { "path": "src/routes/users.ts", "purpose": "User CRUD routes and request validation." }',
+        "Keep apiContracts to 5 routes maximum. Keep fileStructure to 8 files maximum.",
       ].join("\n"),
       userPrompt: JSON.stringify({
         step1: params.step1,
         refinementPrompt: params.refinementPrompt,
       }),
       schema: SpecForgeArchitectureBlockSchema,
+      maxTokens: 4096,
     });
   }
 }

@@ -6,10 +6,19 @@ type RunParams<T> = {
   systemPrompt: string;
   userPrompt: string;
   schema?: z.ZodSchema<T>;
+  maxTokens?: number;
 };
 
 const MAX_PARSE_RETRIES = 2;
 const MAX_429_RETRIES = 10;
+const MAX_PARSE_RETRIES_CFG = Math.max(
+  0,
+  Number.parseInt(process.env.GROQ_AGENT_MAX_PARSE_RETRIES ?? String(MAX_PARSE_RETRIES), 10) || MAX_PARSE_RETRIES,
+);
+const MAX_429_RETRIES_CFG = Math.max(
+  1,
+  Number.parseInt(process.env.GROQ_AGENT_MAX_429_RETRIES ?? String(MAX_429_RETRIES), 10) || MAX_429_RETRIES,
+);
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -56,10 +65,10 @@ export class AgentRunner {
     this.groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
   }
 
-  async run(params: { systemPrompt: string; userPrompt: string }): Promise<string>;
+  async run(params: { systemPrompt: string; userPrompt: string; maxTokens?: number }): Promise<string>;
   async run<T>(params: RunParams<T> & { schema: z.ZodSchema<T> }): Promise<T>;
   async run<T>(params: RunParams<T>): Promise<T | string> {
-    const { systemPrompt, schema } = params;
+    const { systemPrompt, schema, maxTokens } = params;
     let userPrompt = params.userPrompt;
     const forceJson = Boolean(schema);
     const baseStructuredSystemPrompt = forceJson
@@ -67,17 +76,39 @@ export class AgentRunner {
       : systemPrompt;
     let systemPromptForAttempt = baseStructuredSystemPrompt;
 
-    for (let parseAttempt = 0; parseAttempt <= MAX_PARSE_RETRIES; parseAttempt++) {
-      const content = await this.completeChatWith429Backoff(systemPromptForAttempt, userPrompt, forceJson);
+    for (let parseAttempt = 0; parseAttempt <= MAX_PARSE_RETRIES_CFG; parseAttempt++) {
+      const content = await this.completeChatWith429Backoff(
+        systemPromptForAttempt,
+        userPrompt,
+        forceJson,
+        maxTokens,
+      );
+
       if (!schema) return content;
+
       try {
         const parsed = parseModelJsonResponse(content);
         return schema.parse(parsed);
       } catch (err) {
+        if (err instanceof z.ZodError) {
+          const safeRaw = content.length > 900 ? content.slice(0, 900) + "...<truncated>" : content;
+          let safeParsed = "<unserializable>";
+          try {
+            const reparsed = parseModelJsonResponse(content);
+            safeParsed = JSON.stringify(reparsed).slice(0, 1200);
+          } catch {
+            // ignore
+          }
+          // eslint-disable-next-line no-console
+          console.error("AgentRunner schema validation failed", {
+            issues: err.issues.map((i) => ({ path: i.path, code: i.code, message: i.message })),
+            parsedPreview: safeParsed,
+            rawPreview: safeRaw,
+          });
+        }
+
         const recoverable = err instanceof z.ZodError || err instanceof SyntaxError;
-        if (recoverable && parseAttempt < MAX_PARSE_RETRIES) {
-          // Ask the model to repair its previous output into valid JSON matching the schema.
-          // Keep this generic so it works for all agents using schemas.
+        if (recoverable && parseAttempt < MAX_PARSE_RETRIES_CFG) {
           userPrompt = JSON.stringify({
             task: "repair_json_to_match_schema",
             originalUserPrompt: params.userPrompt,
@@ -97,8 +128,6 @@ export class AgentRunner {
               "The first character of your response MUST be '{' and the last character MUST be '}'.",
             ],
           });
-          // Some models ignore the original role prompt during repair and emit reasoning.
-          // Switch to a dedicated repair prompt to strongly constrain format.
           systemPromptForAttempt = [
             "You are a strict JSON repair tool.",
             "Your ONLY job is to output a single JSON object that matches the required schema.",
@@ -107,6 +136,7 @@ export class AgentRunner {
           ].join("\n");
           continue;
         }
+
         throw err;
       }
     }
@@ -118,12 +148,13 @@ export class AgentRunner {
     systemContent: string,
     userContent: string,
     forceJson: boolean,
+    maxTokens?: number,
   ): Promise<string> {
     // If Groq rejects `response_format: json_object` (400 json_validate_failed),
     // fall back to "loose" JSON and parse locally.
     let useResponseFormat = forceJson;
 
-    for (let apiAttempt = 0; apiAttempt < MAX_429_RETRIES; apiAttempt++) {
+    for (let apiAttempt = 0; apiAttempt < MAX_429_RETRIES_CFG; apiAttempt++) {
       try {
         await throttleCompoundIfNeeded(this.model);
         const completion = await this.groq.chat.completions.create({
@@ -132,6 +163,7 @@ export class AgentRunner {
             { role: "system", content: systemContent },
             { role: "user", content: userContent },
           ],
+          max_tokens: maxTokens ?? 4096,
           ...(useResponseFormat ? { response_format: { type: "json_object" as const } } : {}),
         });
         return completion.choices?.[0]?.message?.content ?? "";
@@ -142,14 +174,14 @@ export class AgentRunner {
           await sleep(150 + Math.floor(Math.random() * 250));
           continue;
         }
-        if (isRateLimitError(err) && apiAttempt < MAX_429_RETRIES - 1) {
+        if (isRateLimitError(err) && apiAttempt < MAX_429_RETRIES_CFG - 1) {
           const fromHeader = getRetryAfterMsFromError(err);
           const backoff = fromHeader ?? Math.min(2_000 * 2 ** apiAttempt, 60_000);
           const jitter = Math.floor(Math.random() * 500);
           await sleep(backoff + jitter);
           continue;
         }
-        if (isRequestTooLargeError(err) && apiAttempt < MAX_429_RETRIES - 1) {
+        if (isRequestTooLargeError(err) && apiAttempt < MAX_429_RETRIES_CFG - 1) {
           // Transient 413; retry (primary mitigation is not using `groq/compound` for facets)
           await sleep(2_000 + Math.floor(Math.random() * 1_000));
           continue;

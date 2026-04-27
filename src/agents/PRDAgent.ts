@@ -2,7 +2,8 @@ import type { MarketPulsePackage } from "../contracts/index.js";
 import { AgentRunner } from "../orchestrator/AgentRunner.js";
 import { SpecForgePrdBlockSchema } from "./specForgeSchemas.js";
 
-const MODEL = "openai/gpt-oss-120b" as const;
+const FAST_MODE = process.env.GROQ_SPEC_FORGE_FAST_MODE?.trim() === "1";
+const MODEL = process.env.GROQ_SPEC_FORGE_PRD_MODEL?.trim() || (FAST_MODE ? "openai/gpt-oss-20b" : "openai/gpt-oss-120b");
 
 export class PRDAgent {
   private readonly runner = new AgentRunner(MODEL);
