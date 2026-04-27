@@ -11,9 +11,36 @@ import { pool } from "./storage/db.js";
 
 const app = express();
 
+app.set("trust proxy", 1);
+
+function parseCorsOrigins(): string[] {
+  const raw = process.env.CORS_ORIGINS;
+  const fromEnv = raw
+    ? raw
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : [];
+
+  // Default dev origin so local web can hit local API without extra setup.
+  if (process.env.NODE_ENV !== "production") {
+    fromEnv.push("http://localhost:3000");
+  }
+
+  return Array.from(new Set(fromEnv));
+}
+
+const corsOrigins = parseCorsOrigins();
+
 app.use(
   cors({
-    origin: ["http://localhost:3000"],
+    origin:
+      corsOrigins.length > 0
+        ? corsOrigins
+        : // If no origins configured, be permissive in non-prod, strict in prod.
+          process.env.NODE_ENV === "production"
+          ? false
+          : true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
   }),
@@ -187,7 +214,7 @@ app.get("/v1/runs/latest/artifacts", async (_req, res) => {
   });
 });
 
-const port = 8080;
+const port = Number(process.env.PORT ?? 8080);
 app.listen(port, () => {
   // eslint-disable-next-line no-console
   console.log(`agent-orchestration-api listening on :${port}`);
