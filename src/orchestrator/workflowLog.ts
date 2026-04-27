@@ -146,6 +146,17 @@ export function logRunEvent(e: RunEvent): void {
       });
       return;
     }
+    case "spec_forge_html_generated": {
+      console.log("[workflow]", {
+        ...base,
+        step: "spec_forge_artifact",
+        phase: "html",
+        summary: e.html.summary,
+        byteSizeApprox: e.html.byteSizeApprox,
+        label: "3 — HTML artifact saved",
+      });
+      return;
+    }
     case "step_started": {
       console.log("[workflow]", { ...base, step: e.step.label, kind: e.step.kind, phase: "step_started" });
       return;
@@ -203,6 +214,9 @@ function specForgeDagLabel(
   if (nodeId === "prd_and_risks") {
     if (agent === "PRDAgent") return "1 — PRD & risks: PRD";
     if (agent === "RiskAgent") return "1 — PRD & risks: Risk";
+  }
+  if (nodeId === "frontend" && agent === "FrontendAgent") {
+    return "HTML — Demo artifact";
   }
   const m: Record<import("../contracts/index.js").DagNodeId, string> = {
     prd_and_risks: "1 — PRD & risks",

@@ -113,6 +113,11 @@ export const FileBundleListSchema = z.preprocess(
   }),
 );
 
+export const SpecForgeHtmlOutputSchema = z.object({
+  summary: z.string().min(1),
+  html: z.string().min(1),
+});
+
 export const SpecForgePrdBlockSchema = z.object({
   problemStatement: z.string(),
   users: z.preprocess((v) => asStringArray(v), z.array(z.string())),

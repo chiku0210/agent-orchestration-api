@@ -129,6 +129,10 @@ export type RunEvent =
       fileBundle: { fileCount: number; byteSizeApprox: number };
     })
   | (RunEventBase & {
+      type: "spec_forge_html_generated";
+      html: { summary: string; byteSizeApprox: number };
+    })
+  | (RunEventBase & {
       type: "sandbox_ready";
       sandbox: { provider: "sandpack" | "webcontainers" };
     });
@@ -233,4 +237,9 @@ export type SpecForgeArtifacts = {
 export type FileBundleItem = {
   path: string;
   content: string;
+};
+
+export type SpecForgeHtmlArtifact = {
+  summary: string;
+  html: string;
 };

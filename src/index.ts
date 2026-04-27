@@ -5,6 +5,7 @@ import { z } from "zod";
 import { runEventBus } from "./orchestrator/eventBus.js";
 import { Orchestrator } from "./orchestrator/Orchestrator.js";
 import { getLatestSucceededMarketPulseRunId } from "./storage/runs.js";
+import { getLatestSpecForgeHtmlArtifact } from "./storage/artifacts.js";
 
 const app = express();
 
@@ -88,6 +89,16 @@ app.get("/v1/runs/:runId/events", (req, res) => {
   req.on("close", () => {
     runEventBus.off(runId, handler);
   });
+});
+
+app.get("/v1/runs/:runId/spec-forge-html", async (req, res) => {
+  const { runId } = req.params;
+  const artifact = await getLatestSpecForgeHtmlArtifact(runId);
+  if (!artifact) {
+    res.status(404).json({ error: "not_found", details: { message: "spec_forge_html artifact not found for run" } });
+    return;
+  }
+  res.status(200).json(artifact);
 });
 
 const port = 8080;

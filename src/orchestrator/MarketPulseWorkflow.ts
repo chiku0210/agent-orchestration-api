@@ -10,7 +10,7 @@ import { MarketPulseSynthesizer } from "../agents/MarketPulseSynthesizer.js";
 import { MARKETPULSE_FACET_MODEL } from "../config/models.js";
 import { EventLogger } from "./EventLogger.js";
 import { logWorkflowMilestone } from "./workflowLog.js";
-import { createTimeBudget, withTimeout } from "./timeBudget.js";
+import { createTimeBudget, TimeBudgetExceededError, withTimeout } from "./timeBudget.js";
 import { MarketPulsePackageSchema } from "../contracts/marketPulsePackage.zod.js";
 
 export class MarketPulseWorkflow {
@@ -36,6 +36,8 @@ export class MarketPulseWorkflow {
       message: "step 1 — run 5 research facets in parallel (target user, alternatives, pricing, distribution, risks)",
     });
 
+    const sleep = async (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
     const runFacet = async (facet: {
       id: FacetId;
       role: AgentRole;
@@ -46,14 +48,21 @@ export class MarketPulseWorkflow {
 
       const t0 = Date.now();
       const timeoutForFacet = Math.min(facetTimeoutMs, Math.max(250, budget.remainingMs() - 4_000));
-      const result = await withTimeout(
-        facet.run(),
-        timeoutForFacet,
-        `market_pulse facet ${facet.id}`,
-      ).catch(() => ({
-        facetId: facet.id,
-        summary: "Timed out (degraded facet).",
-      }));
+      const result = await withTimeout(facet.run(), timeoutForFacet, `market_pulse facet ${facet.id}`).catch((err) => {
+        // eslint-disable-next-line no-console
+        console.error(`[MarketPulse] Facet ${facet.id} failed`, err);
+        const status = err && typeof err === "object" ? (err as { status?: number }).status : undefined;
+        if (err instanceof TimeBudgetExceededError) {
+          return { facetId: facet.id, summary: "Timed out (degraded facet)." };
+        }
+        if (status === 429) {
+          return { facetId: facet.id, summary: "Rate-limited (429) (degraded facet)." };
+        }
+        if (status === 413) {
+          return { facetId: facet.id, summary: "Request too large (413) (degraded facet)." };
+        }
+        return { facetId: facet.id, summary: "Facet unavailable (agent failed) (degraded facet)." };
+      });
       const durationMs = Date.now() - t0;
 
       await events.append({ type: "agent_finished", agent: { role: facet.role, model: MARKETPULSE_FACET_MODEL }, durationMs });
@@ -75,26 +84,38 @@ export class MarketPulseWorkflow {
         role: "TargetUserAgent",
         run: () => this.targetUserAgent.run(params.featureIdea),
       }),
-      runFacet({
+      (async () => {
+        await sleep(300);
+        return runFacet({
         id: "alt_solutions",
         role: "AltSolutionsAgent",
         run: () => this.altSolutionsAgent.run(params.featureIdea),
-      }),
-      runFacet({
+        });
+      })(),
+      (async () => {
+        await sleep(600);
+        return runFacet({
         id: "pricing_willingness",
         role: "PricingWillingnessAgent",
         run: () => this.pricingWillingnessAgent.run(params.featureIdea),
-      }),
-      runFacet({
+        });
+      })(),
+      (async () => {
+        await sleep(900);
+        return runFacet({
         id: "distribution",
         role: "DistributionAgent",
         run: () => this.distributionAgent.run(params.featureIdea),
-      }),
-      runFacet({
+        });
+      })(),
+      (async () => {
+        await sleep(1200);
+        return runFacet({
         id: "risks_constraints",
         role: "RisksConstraintsAgent",
         run: () => this.risksConstraintsAgent.run(params.featureIdea),
-      }),
+        });
+      })(),
     ]);
 
     // Fan-in: synthesize a strict MarketPulsePackage.
