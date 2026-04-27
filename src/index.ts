@@ -110,10 +110,21 @@ app.post("/v1/runs", async (req, res) => {
 app.get("/v1/runs/:runId/events", async (req, res) => {
   const { runId } = req.params;
 
-  res.status(200);
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform", // 'no-transform' tells Cloudflare not to compress/alter the stream
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no", // CRITICAL: Tells Render's Nginx proxy to stop buffering and stream instantly
+    "Access-Control-Allow-Origin": process.env.CORS_ORIGINS || "*", // Ensure CORS is maintained here
+  });
+
+  // Immediately flush the headers so the client knows the connection is established
+  res.flushHeaders();
+
+  // Keep-alive heartbeat for Cloudflare
+  const heartbeat = setInterval(() => {
+    res.write(":\n\n"); // A colon indicates an SSE comment. It does nothing but keep the pipe open.
+  }, 15000);
 
   // Initial event so clients know the stream is open.
   res.write(`: connected\n\n`);
@@ -142,6 +153,7 @@ app.get("/v1/runs/:runId/events", async (req, res) => {
   runEventBus.on(runId, handler);
 
   req.on("close", () => {
+    clearInterval(heartbeat);
     runEventBus.off(runId, handler);
   });
 });
