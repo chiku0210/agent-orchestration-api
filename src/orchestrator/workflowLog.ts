@@ -215,7 +215,7 @@ function specForgeDagLabel(
     if (agent === "PRDAgent") return "1 — PRD & risks: PRD";
     if (agent === "RiskAgent") return "1 — PRD & risks: Risk";
   }
-  if (nodeId === "frontend" && agent === "FrontendAgent") {
+  if (nodeId === "frontend" && agent === "DemoScribeAgent") {
     return "HTML — Demo artifact";
   }
   const m: Record<import("../contracts/index.js").DagNodeId, string> = {
@@ -223,7 +223,7 @@ function specForgeDagLabel(
     architecture: "2 — Architecture",
     db: "3 — Database & schema",
     backend: "4 — Backend / API",
-    frontend: "5 — Frontend / UI",
+    frontend: "5 — Demo Scribe",
   };
   return m[nodeId] ?? nodeId;
 }

@@ -62,7 +62,7 @@ export class SpecForgeWorkflow {
       budget,
       nodeTimeoutMs,
       async () => this.riskAgent.run({ marketPulsePackage: marketPulse, refinementPrompt: refinementPromptCapped }),
-      () => []
+      () => ({ risks: [] })
     );
 
     // Step 3: Architecture
@@ -121,7 +121,7 @@ export class SpecForgeWorkflow {
     nodeId: DagNodeId,
     role: AgentRole,
     model: string,
-    budget: createTimeBudget,
+    budget: ReturnType<typeof createTimeBudget>,
     nodeTimeoutMs: number,
     work: () => Promise<T>,
     fallback: () => T,
