@@ -22,11 +22,11 @@ export class ArchitectureAgent {
     const cfg = getAgentConfig({
       workflow: "spec_forge",
       role: "ArchitectureAgent",
-      defaultModel: "llama-3.3-70b-versatile",
-      defaultMaxTokens: 4096,
+      defaultModel: "openai/gpt-oss-20b",
+      defaultMaxTokens: 2048,
     });
     this.runner = new AgentRunner(cfg.model);
-    this.maxTokens = cfg.constraints.maxTokens ?? 4096;
+    this.maxTokens = cfg.constraints.maxTokens ?? 2048;
   }
 
   async run(params: { step1: Step1; refinementPrompt: string }) {

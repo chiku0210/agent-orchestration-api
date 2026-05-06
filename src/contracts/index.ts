@@ -22,9 +22,7 @@ export type AgentRole =
   | "MarketPulseSynthesizer"
   | "PRDAgent"
   | "ArchitectureAgent"
-  | "DBAgent"
-  | "BackendAgent"
-  | "FrontendAgent"
+  | "DemoScribeAgent"
   | "RiskAgent"
   | "ScribeAgent";
 

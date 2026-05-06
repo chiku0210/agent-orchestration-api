@@ -2,6 +2,7 @@ import { AgentRunner } from "../orchestrator/AgentRunner.js";
 import type { MarketPulsePackage } from "../contracts/index.js";
 import { MarketPulsePackageSchema } from "../contracts/marketPulsePackage.zod.js";
 import { getAgentConfig } from "../config/agentConfig.js";
+import { MARKETPULSE_FACET_MODEL } from "../config/models.js";
 
 export { MarketPulsePackageSchema };
 
@@ -13,11 +14,11 @@ export class MarketPulseSynthesizer {
     const cfg = getAgentConfig({
       workflow: "market_pulse",
       role: "MarketPulseSynthesizer",
-      defaultModel: "llama-3.3-70b-versatile",
-      defaultMaxTokens: 6000,
+      defaultModel: MARKETPULSE_FACET_MODEL,
+      defaultMaxTokens: 2048,
     });
     this.runner = new AgentRunner(cfg.model);
-    this.maxTokens = cfg.constraints.maxTokens ?? 6000;
+    this.maxTokens = cfg.constraints.maxTokens ?? 2048;
   }
 
   async synthesize(params: {
@@ -41,10 +42,6 @@ export class MarketPulseSynthesizer {
         "Critical nested shapes (use these EXACT keys):",
         'competitive_landscape: array of { name: string, category: "competitor"|"substitute", strengths: string[], weaknesses: string[], differentiatorsForUs: string[] }',
         'validation_plan: array of { experiment: string, timeBox: string, successCriteria: string }',
-        "",
-        "Examples (for structure only; do not copy text):",
-        'competitive_landscape item example: {"name":"ExampleCo","category":"competitor","strengths":["..."],"weaknesses":["..."],"differentiatorsForUs":["..."]}',
-        'validation_plan item example: {"experiment":"...","timeBox":"1 week","successCriteria":"..."}',
       ].join("\n"),
       userPrompt: JSON.stringify(params),
       schema: MarketPulsePackageSchema,

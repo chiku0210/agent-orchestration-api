@@ -32,14 +32,14 @@ function parseLooseJson(raw: string): unknown {
   throw new SyntaxError(`Could not parse JSON from model output: ${text.slice(0, 120)}`);
 }
 
-export class FrontendAgent {
+export class DemoScribeAgent {
   private readonly runner: AgentRunner;
   private readonly maxTokens: number;
 
   constructor() {
     const cfg = getAgentConfig({
       workflow: "spec_forge",
-      role: "FrontendAgent",
+      role: "DemoScribeAgent",
       defaultModel: "openai/gpt-oss-20b",
       defaultMaxTokens: 6000,
     });
@@ -55,7 +55,7 @@ export class FrontendAgent {
   }): Promise<HtmlOut> {
     const raw = await this.runner.run({
       systemPrompt: [
-        "You are FrontendAgent.",
+        "You are DemoScribeAgent.",
         "Generate a single self-contained HTML document that demonstrates the feature.",
         "This is a demo artifact that will be rendered inside an existing Next.js app, so DO NOT scaffold a backend, DO NOT scaffold a Next.js project, and DO NOT output multiple files.",
         "",
@@ -95,7 +95,7 @@ export class FrontendAgent {
         "  <head>",
         '    <meta charset="utf-8" />',
         '    <meta name="viewport" content="width=device-width, initial-scale=1" />',
-        "    <title>SpecForge (degraded)</title>",
+        "    <title>DemoScribe (degraded)</title>",
         "    <style>",
         "      body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto; margin: 24px; }",
         "      pre { background: #0b1220; color: #d7e0ff; padding: 12px; border-radius: 8px; overflow: auto; }",
@@ -103,7 +103,7 @@ export class FrontendAgent {
         "    </style>",
         "  </head>",
         "  <body>",
-        "    <h1>SpecForge HTML (degraded)</h1>",
+        "    <h1>DemoScribe HTML (degraded)</h1>",
         "    <p>The model returned output, but it did not match <code>{ summary, html }</code>.</p>",
         '    <div class="card">',
         "      <h2>Validation issues</h2>",

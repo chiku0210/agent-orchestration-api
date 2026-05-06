@@ -1,87 +1,105 @@
 import type { AgentRole, DagNodeId, MarketPulsePackage, SpecForgeHtmlArtifact } from "../contracts/index.js";
-import { FrontendAgent } from "../agents/FrontendAgent.js";
+import { PRDAgent } from "../agents/PRDAgent.js";
+import { RiskAgent } from "../agents/RiskAgent.js";
+import { ArchitectureAgent } from "../agents/ArchitectureAgent.js";
+import { DemoScribeAgent } from "../agents/DemoScribeAgent.js";
 import { EventLogger } from "./EventLogger.js";
-import { logWorkflowMilestone } from "./workflowLog.js";
-import { capRefinementPrompt, compactMarketPulseForSpecForge } from "../contracts/marketPulseCompact.js";
 import { getMarketPulsePackageBySourceRunId, saveSpecForgeHtmlArtifact } from "../storage/artifacts.js";
 import { createTimeBudget, withTimeout } from "./timeBudget.js";
 import { TimeBudgetExceededError } from "./timeBudget.js";
 import { getAgentTimeoutMs } from "./agentBudgets.js";
 import { getAgentConfig } from "../config/agentConfig.js";
+import { capRefinementPrompt } from "../contracts/marketPulseCompact.js";
 
 function approxBytes(s: string): number {
   return Buffer.byteLength(s, "utf8");
 }
 
 export class SpecForgeWorkflow {
-  private readonly frontendAgent = new FrontendAgent();
+  private readonly prdAgent = new PRDAgent();
+  private readonly riskAgent = new RiskAgent();
+  private readonly architectureAgent = new ArchitectureAgent();
+  private readonly demoScribeAgent = new DemoScribeAgent();
 
   async run(params: { runId: string; marketPulseRunId: string; refinementPrompt: string }): Promise<SpecForgeHtmlArtifact> {
     const { runId, marketPulseRunId, refinementPrompt } = params;
     const events = new EventLogger({ runId, workflow: "spec_forge" });
-    const budgetMs = Number.parseInt(process.env.SPEC_FORGE_BUDGET_MS ?? "60000", 10) || 60_000;
-    const nodeTimeoutMs = Number.parseInt(process.env.SPEC_FORGE_NODE_TIMEOUT_MS ?? "25000", 10) || 25_000;
+    const budgetMs = Number.parseInt(process.env.SPEC_FORGE_BUDGET_MS ?? "120000", 10) || 120_000;
+    const nodeTimeoutMs = Number.parseInt(process.env.SPEC_FORGE_NODE_TIMEOUT_MS ?? "30000", 10) || 30_000;
     const budget = createTimeBudget(budgetMs);
 
     const marketPulse: MarketPulsePackage | null = await getMarketPulsePackageBySourceRunId(marketPulseRunId);
     if (!marketPulse) {
       throw new Error(`MarketPulse package not found for run ${marketPulseRunId}`);
     }
-    logWorkflowMilestone({
-      runId,
-      workflow: "spec_forge",
-      message: "step 0 — loaded MarketPulse package from artifact store",
-      data: { marketPulseRunId, featureIdeaPreview: marketPulse.featureIdea.slice(0, 120) },
-    });
 
-    // HTML-only mode: generate a single demo HTML document (no backend/frontend scaffolds).
-    const mpCompact = compactMarketPulseForSpecForge(marketPulse, { mode: "tight" });
     const refinementPromptCapped = capRefinementPrompt(refinementPrompt, 4_000);
-    const feCfg = getAgentConfig({
-      workflow: "spec_forge",
-      role: "FrontendAgent",
-      defaultModel: "openai/gpt-oss-20b",
-      defaultTimeoutMs: nodeTimeoutMs,
-    });
 
+    // Step 1: PRD
+    const prd = await this.runDagNodeSequentialBudgeted(
+      events,
+      "prd_and_risks",
+      "PRDAgent",
+      "openai/gpt-oss-20b",
+      budget,
+      nodeTimeoutMs,
+      async () => this.prdAgent.run({ marketPulsePackage: marketPulse, refinementPrompt: refinementPromptCapped }),
+      () => ({
+        problemStatement: "Fallback PRD",
+        users: [],
+        userStories: [],
+        acceptanceCriteria: [],
+        outOfScope: [],
+      })
+    );
+
+    // Step 2: Risks (serial for demo handoff style)
+    const risks = await this.runDagNodeSequentialBudgeted(
+      events,
+      "prd_and_risks",
+      "RiskAgent",
+      "openai/gpt-oss-20b",
+      budget,
+      nodeTimeoutMs,
+      async () => this.riskAgent.run({ marketPulsePackage: marketPulse, refinementPrompt: refinementPromptCapped }),
+      () => []
+    );
+
+    // Step 3: Architecture
+    const architecture = await this.runDagNodeSequentialBudgeted(
+      events,
+      "architecture",
+      "ArchitectureAgent",
+      "openai/gpt-oss-20b",
+      budget,
+      nodeTimeoutMs,
+      async () => this.architectureAgent.run({ step1: { prd, risks }, refinementPrompt: refinementPromptCapped }),
+      () => ({
+        overview: "Fallback architecture",
+        apiContracts: [],
+        dataModelNotes: [],
+        fileStructure: [],
+      })
+    );
+
+    // Step 4: Demo Scribe (Final HTML generation)
     const htmlOut = await this.runDagNodeSequentialBudgeted(
       events,
       "frontend",
-      "FrontendAgent",
-      feCfg.model,
+      "DemoScribeAgent",
+      "openai/gpt-oss-20b",
       budget,
       nodeTimeoutMs,
       async () =>
-        this.frontendAgent.run({
-          architecture: {
-            overview: `HTML-only mode. MarketPulse summary: ${mpCompact.market_fit_summary?.verdict ?? "unknown"} — ${String(
-              mpCompact.market_fit_summary?.rationale ?? "",
-            ).slice(0, 240)}`,
-            apiContracts: [],
-            dataModelNotes: [],
-            fileStructure: [],
-          },
-          db: { sqlMigrations: [], notes: ["No DB generated in HTML-only mode."] },
-          backendFileSummary: "No backend generated in HTML-only mode.",
+        this.demoScribeAgent.run({
+          architecture,
+          db: { sqlMigrations: [], notes: ["Database omitted in demo-only mode."] },
+          backendFileSummary: "Backend omitted in demo-only mode.",
           refinementPrompt: refinementPromptCapped,
         }),
       () => ({
         summary: "Degraded HTML demo (timed out).",
-        html: [
-          "<!doctype html>",
-          "<html>",
-          "  <head>",
-          '    <meta charset="utf-8" />',
-          '    <meta name="viewport" content="width=device-width, initial-scale=1" />',
-          "    <title>SpecForge (degraded)</title>",
-          "  </head>",
-          "  <body>",
-          "    <h1>SpecForge HTML (degraded)</h1>",
-          "    <p>Timed out while generating HTML. Re-run with a larger budget.</p>",
-          "  </body>",
-          "</html>",
-          "",
-        ].join("\n"),
+        html: "<html><body><h1>Timeout</h1></body></html>",
       }),
     );
 
@@ -103,7 +121,7 @@ export class SpecForgeWorkflow {
     nodeId: DagNodeId,
     role: AgentRole,
     model: string,
-    budget: ReturnType<typeof createTimeBudget>,
+    budget: createTimeBudget,
     nodeTimeoutMs: number,
     work: () => Promise<T>,
     fallback: () => T,
@@ -124,7 +142,7 @@ export class SpecForgeWorkflow {
       agent: { role, model: cfg.model, ...(constraints ? { constraints } : {}) },
     });
 
-    const timeoutForNode = Math.min(cfg.constraints.timeoutMs ?? agentTimeoutMs, Math.max(500, budget.remainingMs() - 10_000));
+    const timeoutForNode = Math.min(cfg.constraints.timeoutMs ?? agentTimeoutMs, Math.max(500, (budget as any).remainingMs() - 10_000));
     const { out, outcome, error } = await withTimeout(work(), timeoutForNode, `spec_forge node ${nodeId}/${role}`)
       .then((v) => ({ out: v, outcome: "succeeded" as const, error: undefined }))
       .catch((err) => {
@@ -139,9 +157,9 @@ export class SpecForgeWorkflow {
       });
     const durationMs = Date.now() - t0;
     await events.append({
-      type: "agent_finished",
       agent: { role, model: cfg.model, outcome, ...(error ? { error } : {}) },
       durationMs,
+      type: "agent_finished"
     });
     await events.append({ type: "dag_node_finished", dag: { nodeId, agentRole: role }, durationMs, summary: `${role} complete` });
     return out;

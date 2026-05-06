@@ -29,9 +29,9 @@ export class MarketPulseWorkflow {
     const runId = params.runId ?? randomUUID();
     const createdAt = params.createdAt ?? Date.now();
     const events = new EventLogger({ runId, workflow: "market_pulse" });
-    const budgetMs = Number.parseInt(process.env.MARKET_PULSE_BUDGET_MS ?? "60000", 10) || 60_000;
-    const facetTimeoutMs = Number.parseInt(process.env.MARKET_PULSE_FACET_TIMEOUT_MS ?? "15000", 10) || 15_000;
-    const synthTimeoutMs = Number.parseInt(process.env.MARKET_PULSE_SYNTH_TIMEOUT_MS ?? "20000", 10) || 20_000;
+    const budgetMs = Number.parseInt(process.env.MARKET_PULSE_BUDGET_MS ?? "90000", 10) || 90_000;
+    const facetTimeoutMs = Number.parseInt(process.env.MARKET_PULSE_FACET_TIMEOUT_MS ?? "20000", 10) || 20_000;
+    const synthTimeoutMs = Number.parseInt(process.env.MARKET_PULSE_SYNTH_TIMEOUT_MS ?? "30000", 10) || 30_000;
     const budget = createTimeBudget(budgetMs);
     logWorkflowMilestone({
       runId,
