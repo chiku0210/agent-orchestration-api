@@ -242,6 +242,7 @@ export type SpecForgeArtifacts = {
     description: string;
     dependsOn?: string[];
   }>;
+  output: SpecForgeHtmlArtifact;
 };
 
 export type FileBundleItem = {

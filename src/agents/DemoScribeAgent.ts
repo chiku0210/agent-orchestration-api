@@ -7,29 +7,30 @@ type Arch = z.infer<typeof SpecForgeArchitectureBlockSchema>;
 type Db = z.infer<typeof SpecForgeDbBlockSchema>;
 type HtmlOut = z.infer<typeof SpecForgeHtmlOutputSchema>;
 
-function parseLooseJson(raw: string): unknown {
+function parseLooseHtml(raw: string): HtmlOut {
   const strippedThink = raw.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
   const text = strippedThink;
   if (!text) throw new SyntaxError("Empty model response");
 
-  const candidates: string[] = [text];
-  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fence?.[1]) candidates.push(fence[1].trim());
-  const o0 = text.indexOf("{");
-  const o1 = text.lastIndexOf("}");
-  if (o0 >= 0 && o1 > o0) candidates.push(text.slice(o0, o1 + 1));
-  const a0 = text.indexOf("[");
-  const a1 = text.lastIndexOf("]");
-  if (a0 >= 0 && a1 > a0) candidates.push(text.slice(a0, a1 + 1));
-
-  for (const c of candidates) {
-    try {
-      return JSON.parse(c) as unknown;
-    } catch {
-      // try next
-    }
+  // If it's already raw HTML starting with doctype or html tag
+  if (text.toLowerCase().startsWith("<!doctype html>") || text.toLowerCase().startsWith("<html")) {
+    return { summary: "Generated Demo", html: text };
   }
-  throw new SyntaxError(`Could not parse JSON from model output: ${text.slice(0, 120)}`);
+
+  // Look for markdown fences
+  const fence = text.match(/```(?:html)?\s*([\s\S]*?)```/i);
+  if (fence?.[1]) {
+    return { summary: "Generated Demo", html: fence[1].trim() };
+  }
+
+  // Fallback: try to find an <html> tag anywhere in the string
+  const htmlMatch = text.match(/<html[\s\S]*<\/html>/i);
+  if (htmlMatch?.[0]) {
+    return { summary: "Generated Demo", html: htmlMatch[0] };
+  }
+
+  // Last resort, return the whole text wrapped
+  return { summary: "Generated Demo", html: `<html><body>${text}</body></html>` };
 }
 
 export class DemoScribeAgent {
@@ -40,7 +41,6 @@ export class DemoScribeAgent {
     const cfg = getAgentConfig({
       workflow: "spec_forge",
       role: "DemoScribeAgent",
-      defaultModel: "openai/gpt-oss-20b",
       defaultMaxTokens: 6000,
     });
     this.runner = new AgentRunner(cfg.model);
@@ -56,20 +56,16 @@ export class DemoScribeAgent {
     const raw = await this.runner.run({
       systemPrompt: [
         "You are DemoScribeAgent.",
-        "Generate a single self-contained HTML document that demonstrates the feature.",
+        "Generate a complete, single-file HTML/CSS/JS prototype based on the Architecture and PRD.",
+        "The HTML must be visually polished, using modern CSS (flexbox/grid) and a clean aesthetic.",
         "This is a demo artifact that will be rendered inside an existing Next.js app, so DO NOT scaffold a backend, DO NOT scaffold a Next.js project, and DO NOT output multiple files.",
         "",
-        "Return JSON ONLY with this shape:",
-        '{ "summary": string, "html": string }',
-        "",
-        "The `summary` must be ONE short sentence describing what the HTML demo does.",
-        "The `html` must be a complete HTML document (start with <!doctype html>) with inline CSS + inline JS if needed.",
-        "Keep it small and fast: avoid external dependencies, CDNs, images, or network calls unless essential.",
-        "",
-        "Output rules:",
-        "- No markdown fences.",
-        "- No extra keys.",
-        "- The HTML must be safe to embed (no <script src=...>), and must not assume a backend exists.",
+        "CRITICAL RULES:",
+        "1. Output ONLY raw HTML. Start with <!doctype html>.",
+        "2. Do NOT wrap your output in a JSON object.",
+        "3. Do NOT include markdown code fences (like ```html).",
+        "4. Include all CSS within <style> tags and all JS within <script> tags inside the HTML document.",
+        "5. Keep it small and fast: avoid external dependencies, CDNs, images, or network calls unless essential.",
       ].join("\n"),
       userPrompt: JSON.stringify({
         architecture: params.architecture,
@@ -77,12 +73,11 @@ export class DemoScribeAgent {
         backendFileSummary: params.backendFileSummary,
         refinementPrompt: params.refinementPrompt,
       }),
-      // Intentionally avoid schema-enforced mode here; this model is prone to returning
-      // slightly different keys / wrappers. We'll parse + normalize locally for durability.
+      // Intentionally avoid schema-enforced mode here; we extract the HTML directly.
       maxTokens: this.maxTokens,
     });
 
-    const parsed = typeof raw === "string" ? parseLooseJson(raw) : raw;
+    const parsed = typeof raw === "string" ? parseLooseHtml(raw) : (raw as HtmlOut);
     const validated = SpecForgeHtmlOutputSchema.safeParse(parsed);
     if (validated.success) return validated.data;
 

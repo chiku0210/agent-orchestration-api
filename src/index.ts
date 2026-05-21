@@ -6,7 +6,7 @@ import { z } from "zod";
 import { runEventBus } from "./orchestrator/eventBus.js";
 import { Orchestrator } from "./orchestrator/Orchestrator.js";
 import { getLatestSucceededMarketPulseRunId } from "./storage/runs.js";
-import { getLatestSpecForgeHtmlArtifact, getMarketPulsePackageBySourceRunId } from "./storage/artifacts.js";
+import { getLatestSpecForgeHtmlArtifact, getMarketPulsePackageBySourceRunId, getSpecForgeArtifacts } from "./storage/artifacts.js";
 import { pool } from "./storage/db.js";
 
 const app = express();
@@ -169,34 +169,37 @@ app.get("/v1/runs/:runId/spec-forge-html", async (req, res) => {
 });
 
 // Back-compat endpoint used by the web UI for auto-fetch after `run_finished`.
-// Returns a minimal SpecForgeArtifacts shape (HTML-only mode) plus the MarketPulse package if present.
+// Returns a full SpecForgeArtifacts object (if available) or a minimal one (HTML-only mode),
+// plus the MarketPulse package if present.
 app.get("/v1/runs/:runId/artifacts", async (req, res) => {
   const { runId } = req.params;
 
-  const [marketPulsePackage, specForgeHtml] = await Promise.all([
+  const [marketPulsePackage, fullSpecForge, specForgeHtml] = await Promise.all([
     getMarketPulsePackageBySourceRunId(runId),
+    getSpecForgeArtifacts(runId),
     getLatestSpecForgeHtmlArtifact(runId),
   ]);
 
-  // HTML-only mode: the backend persists a `spec_forge_html` artifact, but the web contract
-  // expects a `specForgeArtifacts.output.html` field. Provide a minimal compatible object.
-  const specForgeArtifacts =
-    specForgeHtml == null
-      ? undefined
-      : {
-          version: 1 as const,
-          runId,
-          createdAt: Date.now(),
-          marketPulseRunId: runId,
-          prd: { problemStatement: "", users: [], userStories: [], acceptanceCriteria: [], outOfScope: [] },
-          architecture: { overview: "", apiContracts: [], dataModelNotes: [], fileStructure: [] },
-          db: { sqlMigrations: [], notes: [] },
-          backend: { notes: [] },
-          frontend: { notes: [] },
-          risks: [],
-          taskPlan: [],
-          output: { html: specForgeHtml.html, summary: specForgeHtml.summary },
-        };
+  let specForgeArtifacts = (fullSpecForge as any) ?? undefined;
+
+  // HTML-only mode fallback: the backend might only have a `spec_forge_html` artifact.
+  // The web contract expects a full object, so provide a minimal compatible one.
+  if (!specForgeArtifacts && specForgeHtml) {
+    specForgeArtifacts = {
+      version: 1 as const,
+      runId,
+      createdAt: Date.now(),
+      marketPulseRunId: runId,
+      prd: { problemStatement: "", users: [], userStories: [], acceptanceCriteria: [], outOfScope: [] },
+      architecture: { overview: "", apiContracts: [], dataModelNotes: [], fileStructure: [] },
+      db: { sqlMigrations: [], notes: [] },
+      backend: { notes: [] },
+      frontend: { notes: [] },
+      risks: [],
+      taskPlan: [],
+      output: { html: specForgeHtml.html, summary: specForgeHtml.summary },
+    };
+  }
 
   if (!marketPulsePackage && !specForgeArtifacts) {
     res.status(404).json({ error: "not_found", details: { message: "no artifacts found for run" } });

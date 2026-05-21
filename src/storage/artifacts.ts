@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type { FileBundleItem, MarketPulsePackage, SpecForgeHtmlArtifact } from "../contracts/index.js";
+import type { FileBundleItem, MarketPulsePackage, SpecForgeArtifacts, SpecForgeHtmlArtifact } from "../contracts/index.js";
 import { MarketPulsePackageSchema } from "../contracts/marketPulsePackage.zod.js";
 import { pool } from "./db.js";
 
@@ -32,6 +32,20 @@ export async function saveArtifact(runId: string, kind: string, content: unknown
 
 export async function saveMarketPulsePackageArtifact(runId: string, pkg: MarketPulsePackage): Promise<string> {
   return saveArtifact(runId, "market_pulse_package", pkg);
+}
+
+export async function saveSpecForgeArtifacts(runId: string, artifacts: SpecForgeArtifacts): Promise<string> {
+  return saveArtifact(runId, "spec_forge_artifacts", artifacts);
+}
+
+export async function getSpecForgeArtifacts(runId: string): Promise<SpecForgeArtifacts | null> {
+  const r = await pool.query<{ content: unknown }>(
+    `select content from artifacts where run_id = $1 and kind = $2 order by created_at desc limit 1`,
+    [runId, "spec_forge_artifacts"],
+  );
+  const row = r.rows[0];
+  if (!row || !row.content || typeof row.content !== "object") return null;
+  return row.content as SpecForgeArtifacts;
 }
 
 export async function getMarketPulsePackageBySourceRunId(mpRunId: string): Promise<MarketPulsePackage | null> {

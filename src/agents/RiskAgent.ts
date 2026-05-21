@@ -7,11 +7,9 @@ export class RiskAgent {
   private readonly runner: AgentRunner;
 
   constructor() {
-    const defaultModel = process.env.GROQ_SPEC_FORGE_RISK_MODEL?.trim() || "openai/gpt-oss-safeguard-20b";
     const cfg = getAgentConfig({
       workflow: "spec_forge",
       role: "RiskAgent",
-      defaultModel,
     });
     this.runner = new AgentRunner(cfg.model);
   }
@@ -19,9 +17,12 @@ export class RiskAgent {
   async run(params: { marketPulsePackage: MarketPulsePackage; refinementPrompt: string }) {
     return this.runner.run({
       systemPrompt: [
-        "You are RiskAgent for SpecForge (security, privacy, reliability, abuse, compliance).",
-        "You receive a MarketPulsePackage and a user refinement prompt.",
-        "Output ONLY JSON with a `risks` array: { category, risk, mitigation }.",
+        "You are RiskAgent for SpecForge.",
+        "Your job is to identify potential risks in the proposed product and provide concrete mitigations.",
+        "Categories of risk to consider: security, privacy, reliability, abuse, compliance.",
+        "Output ONLY a JSON object with a `risks` array. Each item must have: { category, risk, mitigation }.",
+        "Ensure the risks are specific to the feature idea and the MarketPulsePackage context provided.",
+        "Do NOT include markdown fences or any text outside the JSON object.",
       ].join("\n"),
       userPrompt: JSON.stringify({
         marketPulsePackage: params.marketPulsePackage,

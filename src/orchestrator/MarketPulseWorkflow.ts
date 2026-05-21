@@ -122,8 +122,8 @@ export class MarketPulseWorkflow {
       return result;
     };
 
-    // Fan-out: facets use a plain chat model (default `openai/gpt-oss-20b`), not `groq/compound`,
-    // to avoid 413/429 and flaky JSON from the Compound system. Parallel is OK (high RPM on 20B).
+    // Fan-out: facets use a plain chat model (default `mistralai/mistral-nemotron`).
+    // Parallel is smoothed by the NIM throttler in AgentRunner.
     const [targetUser, altSolutions, pricing, distribution, risks] = await Promise.all([
       runFacet({
         id: "target_user",
@@ -175,7 +175,6 @@ export class MarketPulseWorkflow {
     const synthCfg = getAgentConfig({
       workflow: "market_pulse",
       role: synthRole,
-      defaultModel: "llama-3.3-70b-versatile",
       defaultTimeoutMs: synthTimeoutResolved,
     });
     const synthConstraints =

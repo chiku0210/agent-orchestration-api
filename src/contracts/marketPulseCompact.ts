@@ -12,8 +12,8 @@ function capArr(strings: string[], maxItems: number, each: number): string[] {
 }
 
 /**
- * Groq on_demand tiers often cap a single request at ~8k **tokens** for smaller models
- * (e.g. gpt-oss-safeguard-20b). A full `MarketPulsePackage` JSON can exceed that
+ * NIM on_demand tiers often cap a single request at ~8k **tokens** for smaller models
+ * (e.g. llama-3.1-8b). A full `MarketPulsePackage` JSON can exceed that
  * (facets, long rationale strings, etc.) while the MarketPulse **synth** run uses
  * a different model / prompt shape and can stay under the limit.
  *
@@ -91,7 +91,7 @@ export function compactMarketPulseForSpecForge(
 
 const DEFAULT_REFINEMENT_CAP = 4000;
 /**
- * Groq on_demand: small models (e.g. gpt-oss-safeguard-20b) can reject a single call when
+ * NIM on_demand: small models (e.g. mistral-nemotron) can reject a single call when
  * "Requested" input tokens over ~8k. JSON is token-dense, so the serialized user payload
  * should stay in a low character budget.
  */
@@ -109,8 +109,8 @@ function userPayloadSize(mp: MarketPulsePackage, r: string): number {
 }
 
 /**
- * Re-compact and trim until the user JSON is small enough for low-tier Groq small models
- * (e.g. 8k TPM for `openai/gpt-oss-safeguard-20b` on on_demand).
+ * Re-compact and trim until the user JSON is small enough for low-tier NIM small models
+ * (e.g. 8k TPM for `mistralai/mistral-nemotron` on on_demand).
  */
 export function buildSpecForgeMpContext(
   marketPulse: MarketPulsePackage,

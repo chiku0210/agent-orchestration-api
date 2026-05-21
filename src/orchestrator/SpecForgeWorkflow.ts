@@ -1,10 +1,10 @@
-import type { AgentRole, DagNodeId, MarketPulsePackage, SpecForgeHtmlArtifact } from "../contracts/index.js";
+import type { AgentRole, DagNodeId, MarketPulsePackage, SpecForgeArtifacts, SpecForgeHtmlArtifact } from "../contracts/index.js";
 import { PRDAgent } from "../agents/PRDAgent.js";
 import { RiskAgent } from "../agents/RiskAgent.js";
 import { ArchitectureAgent } from "../agents/ArchitectureAgent.js";
 import { DemoScribeAgent } from "../agents/DemoScribeAgent.js";
 import { EventLogger } from "./EventLogger.js";
-import { getMarketPulsePackageBySourceRunId, saveSpecForgeHtmlArtifact } from "../storage/artifacts.js";
+import { getMarketPulsePackageBySourceRunId, saveSpecForgeArtifacts, saveSpecForgeHtmlArtifact } from "../storage/artifacts.js";
 import { createTimeBudget, withTimeout } from "./timeBudget.js";
 import { TimeBudgetExceededError } from "./timeBudget.js";
 import { getAgentTimeoutMs } from "./agentBudgets.js";
@@ -21,7 +21,7 @@ export class SpecForgeWorkflow {
   private readonly architectureAgent = new ArchitectureAgent();
   private readonly demoScribeAgent = new DemoScribeAgent();
 
-  async run(params: { runId: string; marketPulseRunId: string; refinementPrompt: string }): Promise<SpecForgeHtmlArtifact> {
+  async run(params: { runId: string; marketPulseRunId: string; refinementPrompt: string }): Promise<SpecForgeArtifacts> {
     const { runId, marketPulseRunId, refinementPrompt } = params;
     const events = new EventLogger({ runId, workflow: "spec_forge" });
     const budgetMs = Number.parseInt(process.env.SPEC_FORGE_BUDGET_MS ?? "120000", 10) || 120_000;
@@ -35,42 +35,42 @@ export class SpecForgeWorkflow {
 
     const refinementPromptCapped = capRefinementPrompt(refinementPrompt, 4_000);
 
-    // Step 1: PRD
-    const prd = await this.runDagNodeSequentialBudgeted(
-      events,
-      "prd_and_risks",
-      "PRDAgent",
-      "openai/gpt-oss-20b",
-      budget,
-      nodeTimeoutMs,
-      async () => this.prdAgent.run({ marketPulsePackage: marketPulse, refinementPrompt: refinementPromptCapped }),
-      () => ({
-        problemStatement: "Fallback PRD",
-        users: [],
-        userStories: [],
-        acceptanceCriteria: [],
-        outOfScope: [],
-      })
-    );
-
-    // Step 2: Risks (serial for demo handoff style)
-    const risks = await this.runDagNodeSequentialBudgeted(
-      events,
-      "prd_and_risks",
-      "RiskAgent",
-      "openai/gpt-oss-20b",
-      budget,
-      nodeTimeoutMs,
-      async () => this.riskAgent.run({ marketPulsePackage: marketPulse, refinementPrompt: refinementPromptCapped }),
-      () => ({ risks: [] })
-    );
+    // Step 1: PRD and Risks (Parallel)
+    const [prd, risks] = await Promise.all([
+      this.runDagNodeSequentialBudgeted(
+        events,
+        "prd_and_risks",
+        "PRDAgent",
+        "",
+        budget,
+        nodeTimeoutMs,
+        async () => this.prdAgent.run({ marketPulsePackage: marketPulse, refinementPrompt: refinementPromptCapped }),
+        () => ({
+          problemStatement: "Fallback PRD",
+          users: [],
+          userStories: [],
+          acceptanceCriteria: [],
+          outOfScope: [],
+        })
+      ),
+      this.runDagNodeSequentialBudgeted(
+        events,
+        "prd_and_risks",
+        "RiskAgent",
+        "",
+        budget,
+        nodeTimeoutMs,
+        async () => this.riskAgent.run({ marketPulsePackage: marketPulse, refinementPrompt: refinementPromptCapped }),
+        () => ({ risks: [] })
+      ),
+    ]);
 
     // Step 3: Architecture
     const architecture = await this.runDagNodeSequentialBudgeted(
       events,
       "architecture",
       "ArchitectureAgent",
-      "openai/gpt-oss-20b",
+      "",
       budget,
       nodeTimeoutMs,
       async () => this.architectureAgent.run({ step1: { prd, risks }, refinementPrompt: refinementPromptCapped }),
@@ -87,7 +87,7 @@ export class SpecForgeWorkflow {
       events,
       "frontend",
       "DemoScribeAgent",
-      "openai/gpt-oss-20b",
+      "",
       budget,
       nodeTimeoutMs,
       async () =>
@@ -103,17 +103,36 @@ export class SpecForgeWorkflow {
       }),
     );
 
-    const artifact: SpecForgeHtmlArtifact = {
-      summary: htmlOut.summary,
-      html: htmlOut.html,
+    const artifacts: SpecForgeArtifacts = {
+      version: 1,
+      runId,
+      createdAt: Date.now(),
+      marketPulseRunId,
+      prd,
+      risks: risks.risks,
+      architecture,
+      db: { sqlMigrations: [], notes: ["Database omitted in demo-only mode."] },
+      backend: { notes: [] },
+      frontend: { notes: [] },
+      taskPlan: [],
+      output: {
+        summary: htmlOut.summary,
+        html: htmlOut.html,
+      },
     };
-    await saveSpecForgeHtmlArtifact(runId, artifact);
+
+    // Save full artifacts
+    await saveSpecForgeArtifacts(runId, artifacts);
+    
+    // Save legacy HTML artifact for backwards compatibility if needed
+    await saveSpecForgeHtmlArtifact(runId, { summary: htmlOut.summary, html: htmlOut.html });
+
     await events.append({
       type: "spec_forge_html_generated",
-      html: { summary: artifact.summary, byteSizeApprox: approxBytes(artifact.html) },
+      html: { summary: htmlOut.summary, byteSizeApprox: approxBytes(htmlOut.html) },
     });
 
-    return artifact;
+    return artifacts;
   }
 
   private async runDagNodeSequentialBudgeted<T>(

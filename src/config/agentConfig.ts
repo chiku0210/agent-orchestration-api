@@ -1,4 +1,5 @@
 import type { AgentRole, WorkflowType } from "../contracts/index.js";
+import { getModelForRole } from "./modelControl.js";
 
 function readEnvInt(name: string): number | null {
   const raw = process.env[name];
@@ -45,16 +46,13 @@ export type ResolvedAgentConfig = {
 export function getAgentConfig(params: {
   workflow: WorkflowType;
   role: AgentRole;
-  defaultModel: string;
+  defaultModel?: string;
   defaultTimeoutMs?: number;
   defaultMaxTokens?: number;
 }): ResolvedAgentConfig {
   const { workflow, role } = params;
 
-  const model =
-    readEnvStr(`AGENT_MODEL__${workflow}__${role}`) ??
-    readEnvStr(`AGENT_MODEL__${role}`) ??
-    params.defaultModel;
+  const model = params.defaultModel || getModelForRole(role);
 
   const timeoutMs =
     readEnvInt(`AGENT_TIMEOUT_MS__${workflow}__${role}`) ??

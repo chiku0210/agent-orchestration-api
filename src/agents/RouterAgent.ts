@@ -16,7 +16,6 @@ export class RouterAgent {
       // Router is workflow-agnostic; allow generic override via AGENT_MODEL__RouterAgent.
       workflow: "market_pulse",
       role: "RouterAgent",
-      defaultModel: "openai/gpt-oss-20b",
     });
     this.runner = new AgentRunner(cfg.model);
   }

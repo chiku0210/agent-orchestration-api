@@ -1,6 +1,6 @@
 import { z } from "zod";
-import Groq from "groq-sdk";
-import { throttleCompoundIfNeeded } from "./groqThrottle.js";
+import OpenAI from "openai";
+import { throttleNIMIfNeeded } from "./nimThrottle.js";
 
 type RunParams<T> = {
   systemPrompt: string;
@@ -13,11 +13,12 @@ const MAX_PARSE_RETRIES = 2;
 const MAX_429_RETRIES = 10;
 const MAX_PARSE_RETRIES_CFG = Math.max(
   0,
-  Number.parseInt(process.env.GROQ_AGENT_MAX_PARSE_RETRIES ?? String(MAX_PARSE_RETRIES), 10) || MAX_PARSE_RETRIES,
+  Number.parseInt(process.env.NIM_AGENT_MAX_PARSE_RETRIES ?? String(MAX_PARSE_RETRIES), 10) ||
+    MAX_PARSE_RETRIES,
 );
 const MAX_429_RETRIES_CFG = Math.max(
   1,
-  Number.parseInt(process.env.GROQ_AGENT_MAX_429_RETRIES ?? String(MAX_429_RETRIES), 10) || MAX_429_RETRIES,
+  Number.parseInt(process.env.NIM_AGENT_MAX_429_RETRIES ?? String(MAX_429_RETRIES), 10) || MAX_429_RETRIES,
 );
 
 function sleep(ms: number): Promise<void> {
@@ -34,17 +35,6 @@ function isRequestTooLargeError(err: unknown): boolean {
   return (err as { status?: number }).status === 413;
 }
 
-function isGroqJsonValidateFailedError(err: unknown): boolean {
-  if (!err || typeof err !== "object") return false;
-  const anyErr = err as {
-    status?: number;
-    error?: { error?: { code?: string; type?: string } };
-  };
-  if (anyErr.status !== 400) return false;
-  const code = anyErr.error?.error?.code;
-  return code === "json_validate_failed";
-}
-
 function getRetryAfterMsFromError(err: unknown): number | null {
   if (!err || typeof err !== "object") return null;
   const headers = (err as { headers?: { get?: (k: string) => string | null } }).headers;
@@ -56,13 +46,21 @@ function getRetryAfterMsFromError(err: unknown): number | null {
   return null;
 }
 
+function isBadRequestError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  return (err as { status?: number }).status === 400;
+}
+
 export class AgentRunner {
   private readonly model: string;
-  private readonly groq: Groq;
+  private readonly client: OpenAI;
 
   constructor(model: string) {
     this.model = model;
-    this.groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+    this.client = new OpenAI({
+      apiKey: process.env.NVIDIA_NIM_API_KEY,
+      baseURL: process.env.NVIDIA_NIM_BASE_URL || "https://integrate.api.nvidia.com/v1",
+    });
   }
 
   async run(params: { systemPrompt: string; userPrompt: string; maxTokens?: number }): Promise<string>;
@@ -150,14 +148,13 @@ export class AgentRunner {
     forceJson: boolean,
     maxTokens?: number,
   ): Promise<string> {
-    // If Groq rejects `response_format: json_object` (400 json_validate_failed),
-    // fall back to "loose" JSON and parse locally.
+    // NVIDIA NIM supports standard chat completion params.
     let useResponseFormat = forceJson;
 
     for (let apiAttempt = 0; apiAttempt < MAX_429_RETRIES_CFG; apiAttempt++) {
       try {
-        await throttleCompoundIfNeeded(this.model);
-        const completion = await this.groq.chat.completions.create({
+        await throttleNIMIfNeeded(this.model);
+        const completion = await this.client.chat.completions.create({
           model: this.model,
           messages: [
             { role: "system", content: systemContent },
@@ -168,10 +165,10 @@ export class AgentRunner {
         });
         return completion.choices?.[0]?.message?.content ?? "";
       } catch (err) {
-        if (useResponseFormat && isGroqJsonValidateFailedError(err)) {
+        if (useResponseFormat && isBadRequestError(err)) {
+          // If the model doesn't support json_object mode, fall back to normal text.
           useResponseFormat = false;
-          // Tiny jitter to avoid immediately repeating identical failures.
-          await sleep(150 + Math.floor(Math.random() * 250));
+          await sleep(200 + Math.floor(Math.random() * 300));
           continue;
         }
         if (isRateLimitError(err) && apiAttempt < MAX_429_RETRIES_CFG - 1) {
@@ -182,7 +179,6 @@ export class AgentRunner {
           continue;
         }
         if (isRequestTooLargeError(err) && apiAttempt < MAX_429_RETRIES_CFG - 1) {
-          // Transient 413; retry (primary mitigation is not using `groq/compound` for facets)
           await sleep(2_000 + Math.floor(Math.random() * 1_000));
           continue;
         }

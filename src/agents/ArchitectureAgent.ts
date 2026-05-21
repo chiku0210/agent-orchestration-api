@@ -22,7 +22,6 @@ export class ArchitectureAgent {
     const cfg = getAgentConfig({
       workflow: "spec_forge",
       role: "ArchitectureAgent",
-      defaultModel: "openai/gpt-oss-20b",
       defaultMaxTokens: 2048,
     });
     this.runner = new AgentRunner(cfg.model);
@@ -34,12 +33,14 @@ export class ArchitectureAgent {
       systemPrompt: [
         "You are ArchitectureAgent.",
         "You receive the PRD + risks (Step 1) and a refinement prompt.",
-        "Define API route contracts (method/path) and a proposed file structure.",
-        "Output ONLY JSON: overview, apiContracts, dataModelNotes, fileStructure.",
-        "apiContracts.requestSchema/responseSchema may be empty objects or JSON schema shapes as plain JSON values.",
+        "Your job is to define a high-level technical architecture, including API contracts and file structure.",
+        "Output ONLY a single JSON object with the following keys: overview, apiContracts, dataModelNotes, fileStructure.",
+        "apiContracts.requestSchema/responseSchema may be empty objects or simple JSON schema shapes.",
         "",
-        "Critical: fileStructure MUST be an array of objects with EXACTLY: { path: string, purpose: string }.",
-        "Do not omit `purpose` — it must be a short sentence explaining why the file exists and what it contains.",
+        "CRITICAL RULES:",
+        "1. fileStructure MUST be an array of objects with EXACTLY: { path: string, purpose: string }.",
+        "2. Do not omit `purpose` — it must be a clear sentence explaining the file's role.",
+        "3. Output ONLY the JSON object. No markdown fences, no preambles, no explanations.",
         'Example fileStructure item: { "path": "src/routes/users.ts", "purpose": "User CRUD routes and request validation." }',
         "Keep apiContracts to 5 routes maximum. Keep fileStructure to 8 files maximum.",
       ].join("\n"),

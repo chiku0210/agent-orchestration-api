@@ -34,7 +34,7 @@ Transforms a MarketPulse package into a full technical specification and interac
 
 ## Tech Stack
 
-- **Inference:** [Groq SDK](https://groq.com/) (Llama 3.3, Qwen, GPT-OSS)
+- **Inference:** NVIDIA NIM (OpenAI SDK) (Mistral Nemotron, Gemma 3N)
 - **Runtime:** Node.js (ESM) + TypeScript
 - **Framework:** Express v5 (Beta)
 - **Database:** PostgreSQL (Schema-backed)
@@ -90,7 +90,7 @@ Fetch the final MarketPulse package or SpecForge HTML.
 
 2. **Environment Setup**
    Copy `.env.example` to `.env` and provide:
-   - `GROQ_API_KEY`
+   - `NVIDIA_NIM_API_KEY`
    - `DATABASE_URL` (PostgreSQL)
 
 3. **Database Initialization**

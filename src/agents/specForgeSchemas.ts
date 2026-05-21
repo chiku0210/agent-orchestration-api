@@ -118,45 +118,124 @@ export const SpecForgeHtmlOutputSchema = z.object({
   html: z.string().min(1),
 });
 
-export const SpecForgePrdBlockSchema = z.object({
-  problemStatement: z.string(),
-  users: z.preprocess((v) => asStringArray(v), z.array(z.string())),
-  userStories: z.preprocess((v) => asStringArray(v), z.array(z.string())),
-  acceptanceCriteria: z.preprocess((v) => asStringArray(v), z.array(z.string())),
-  outOfScope: z.preprocess((v) => asStringArray(v), z.array(z.string())),
-});
+export const SpecForgePrdBlockSchema = z.preprocess(
+  (input) => {
+    if (!input || typeof input !== "object") return input;
+    const o = input as Record<string, unknown>;
+    return {
+      ...o,
+      problemStatement: o.problemStatement ?? o.problem_statement ?? o.statement ?? o.summary ?? "",
+      users: o.users ?? o.target_users ?? o.audience ?? [],
+      userStories: o.userStories ?? o.user_stories ?? o.stories ?? [],
+      acceptanceCriteria: o.acceptanceCriteria ?? o.acceptance_criteria ?? o.criteria ?? [],
+      outOfScope: o.outOfScope ?? o.out_of_scope ?? o.exclusions ?? [],
+    };
+  },
+  z.object({
+    problemStatement: z.string(),
+    users: z.preprocess((v) => asStringArray(v), z.array(z.string())),
+    userStories: z.preprocess((v) => asStringArray(v), z.array(z.string())),
+    acceptanceCriteria: z.preprocess((v) => asStringArray(v), z.array(z.string())),
+    outOfScope: z.preprocess((v) => asStringArray(v), z.array(z.string())),
+  }),
+);
 
-export const SpecForgeRiskListSchema = z.object({
-  risks: z.array(
-    z.object({
-      category: z.enum(["security", "privacy", "reliability", "abuse", "compliance"]),
-      risk: z.string(),
-      mitigation: z.string(),
-    }),
-  ),
-});
+function normalizeRiskItem(item: unknown): unknown {
+  if (!item || typeof item !== "object") return item;
+  const o = item as Record<string, unknown>;
+  let category = typeof o.category === "string" ? o.category.toLowerCase() : null;
+  if (category) {
+    if (category.includes("security")) category = "security";
+    else if (category.includes("privacy")) category = "privacy";
+    else if (category.includes("reliab")) category = "reliability";
+    else if (category.includes("abuse")) category = "abuse";
+    else if (category.includes("complian")) category = "compliance";
+  }
+  return {
+    ...o,
+    ...(category ? { category } : {}),
+  };
+}
 
-export const SpecForgeArchitectureBlockSchema = z.object({
-  overview: z.string(),
-  apiContracts: z.array(
-    z.object({
-      method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
-      path: z.string(),
-      requestSchema: z.unknown(),
-      responseSchema: z.unknown(),
-    }),
-  ),
-  dataModelNotes: z.preprocess((v) => asStringArray(v), z.array(z.string())),
-  fileStructure: z.array(
-    z.object({
-      path: z.string(),
-      // Models occasionally omit `purpose`. Keep the run durable by coercing
-      // missing/invalid values to a placeholder string, while still preferring
-      // a real explanation when present.
-      purpose: z.string().min(1).catch("TODO: describe purpose"),
-    }),
-  ),
-});
+export const SpecForgeRiskListSchema = z.preprocess(
+  (input) => {
+    if (!input || typeof input !== "object") return input;
+    const o = input as Record<string, unknown>;
+    const risks = o.risks ?? o.risk_list ?? o.identified_risks ?? [];
+    return {
+      ...o,
+      risks: Array.isArray(risks) ? risks.map(normalizeRiskItem) : [],
+    };
+  },
+  z.object({
+    risks: z.array(
+      z.object({
+        category: z.enum(["security", "privacy", "reliability", "abuse", "compliance"]),
+        risk: z.string(),
+        mitigation: z.string(),
+      }),
+    ),
+  }),
+);
+
+function normalizeApiContract(item: unknown): unknown {
+  if (!item || typeof item !== "object") return item;
+  const o = item as Record<string, unknown>;
+
+  const path = (typeof o.path === "string" && o.path) || (typeof o.route === "string" && o.route) || null;
+  let method = typeof o.method === "string" ? o.method.toUpperCase() : null;
+  const validMethods = ["GET", "POST", "PUT", "PATCH", "DELETE"];
+  if (method && !validMethods.includes(method)) {
+    method = null;
+  }
+
+  if (path !== null || method !== null) {
+    return {
+      ...o,
+      ...(path !== null ? { path } : {}),
+      ...(method !== null ? { method } : {}),
+    };
+  }
+  return o;
+}
+
+export const SpecForgeArchitectureBlockSchema = z.preprocess(
+  (input) => {
+    if (!input || typeof input !== "object") return input;
+    const o = input as Record<string, unknown>;
+    return {
+      ...o,
+      overview: o.overview ?? o.summary ?? o.architecture_overview ?? "",
+      apiContracts: o.apiContracts ?? o.api_contracts ?? o.routes ?? o.endpoints ?? [],
+      dataModelNotes: o.dataModelNotes ?? o.data_model_notes ?? o.database_notes ?? [],
+      fileStructure: o.fileStructure ?? o.file_structure ?? o.files ?? [],
+    };
+  },
+  z.object({
+    overview: z.string(),
+    apiContracts: z.preprocess(
+      (v) => (Array.isArray(v) ? v.map(normalizeApiContract) : v),
+      z.array(
+        z.object({
+          method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
+          path: z.string(),
+          requestSchema: z.unknown(),
+          responseSchema: z.unknown(),
+        }),
+      ),
+    ),
+    dataModelNotes: z.preprocess((v) => asStringArray(v), z.array(z.string())),
+    fileStructure: z.array(
+      z.object({
+        path: z.string(),
+        // Models occasionally omit `purpose`. Keep the run durable by coercing
+        // missing/invalid values to a placeholder string, while still preferring
+        // a real explanation when present.
+        purpose: z.string().min(1).catch("TODO: describe purpose"),
+      }),
+    ),
+  }),
+);
 
 export const SpecForgeDbBlockSchema = z.object({
   sqlMigrations: z.array(
