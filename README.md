@@ -34,7 +34,7 @@ Transforms a MarketPulse package into a full technical specification and interac
 
 ## Tech Stack
 
-- **Inference:** NVIDIA NIM (OpenAI SDK) (Mistral Nemotron, Gemma 3N)
+- **Inference:** NVIDIA NIM (OpenAI SDK) (Llama 3.1 8B, Llama 3.1 70B)
 - **Runtime:** Node.js (ESM) + TypeScript
 - **Framework:** Express v5 (Beta)
 - **Database:** PostgreSQL (Schema-backed)
@@ -105,7 +105,8 @@ Fetch the final MarketPulse package or SpecForge HTML.
 
 ## Advanced Configuration
 
-The system uses a hierarchical model routing system in `.env`:
-- `AGENT_MODEL__<workflow>__<Role>`: Specific model for a role in a workflow.
-- `AGENT_TIMEOUT_MS__<Role>`: Custom timeout for high-latency tasks.
-- `MARKET_PULSE_BUDGET_MS`: Global cap on the total workflow duration.
+The system uses a centralized model control registry located at `src/config/modelControl.ts`. 
+
+- **Central Source of Truth:** Add your models to the `MODELS` object and map them to specific agents in the `AGENT_MODEL_MAPPING`.
+- **Optimization Strategy:** By default, the system uses a fast model (e.g., Llama 3.1 8B) for parallel facets and HTML rendering, and a heavy-reasoning model (e.g., Llama 3.1 70B) for deep architectural design and PRD synthesis.
+- **Time Budgets:** You can control the maximum execution time via `.env` variables like `MARKET_PULSE_BUDGET_MS` (global) and `SPEC_FORGE_NODE_TIMEOUT_MS` (per-node) to ensure slow models don't cause the system to hang indefinitely.
